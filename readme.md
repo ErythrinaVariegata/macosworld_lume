@@ -31,6 +31,7 @@
 <br/>
 
 ## 🆕 Updates
+ - **[18 Sep 2025]** macOSWorld accepted to NeurIPS 2025
  - **[15 Sep 2025]** Optimised the automated benchmark execution experience; Added a GUI display for real-time benchmark progress and results
 
 <br/>
