@@ -91,6 +91,9 @@ def run_task(
         from utils.VNCClient import VNCClient_Lume
         from constants import lume_snapshot_lookup
 
+        # Clean up any stale VMs from previous crashed runs
+        LumeTools.cleanup_stale_vms()
+
         golden_vm_name = lume_snapshot_lookup.get(snapshot_name)
         if golden_vm_name is None:
             raise ValueError(

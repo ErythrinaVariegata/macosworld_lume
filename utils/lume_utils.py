@@ -22,6 +22,36 @@ class LumeTools:
         self.vnc_password = vnc_password
 
     @staticmethod
+    def cleanup_stale_vms(prefix: str = "macosworld_"):
+        """Delete any stopped VMs whose names start with the given prefix.
+
+        This is a best-effort garbage collector for VMs left over from
+        previous runs that crashed before cleanup.
+        """
+        try:
+            result = subprocess.run(
+                ["lume", "ls", "-f", "json"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                return
+            import json as _json
+            vms = _json.loads(result.stdout)
+            if not isinstance(vms, list):
+                return
+            for vm in vms:
+                name = vm.get("name", "")
+                status = vm.get("status", "")
+                if name.startswith(prefix) and status == "stopped":
+                    print_message(f'Cleaning up stale VM "{name}"', title="Lume")
+                    subprocess.run(
+                        ["lume", "delete", name, "--force"],
+                        capture_output=True, text=True, timeout=30,
+                    )
+        except Exception:
+            pass  # best-effort
+
+    @staticmethod
     def _run_lume_command(args: list, timeout: int = 300) -> subprocess.CompletedProcess:
         """Run a lume CLI command and return the result."""
         cmd = ["lume"] + args
@@ -46,7 +76,11 @@ class LumeTools:
             )
             return {}
         try:
-            return json.loads(result.stdout)
+            data = json.loads(result.stdout)
+            # lume get returns a list with one element
+            if isinstance(data, list) and len(data) > 0:
+                return data[0]
+            return data if isinstance(data, dict) else {}
         except json.JSONDecodeError:
             print_message(
                 f"Failed to parse VM info JSON: {result.stdout}",
@@ -77,26 +111,39 @@ class LumeTools:
     def start_vm(self) -> bool:
         """Start the VM in headless mode (no display).
 
+        ``lume run --no-display`` blocks until the VM shuts down, so we
+        launch it as a background process and poll until the VM is running.
+
         Returns True on success.
         """
         print_message(f'Starting VM "{self.vm_name}"', title="Lume")
-        cmd = ["run", self.vm_name, "--no-display"]
+        cmd = ["lume", "run", self.vm_name, "--no-display"]
         if self.vnc_password is not None:
             cmd += ["--vnc-password", self.vnc_password]
-        result = self._run_lume_command(cmd, timeout=120)
-        # lume run may block until VM shuts down in some versions;
-        # in newer versions it returns immediately in --no-display mode.
-        if result.returncode != 0:
-            # Check if the VM actually started despite the non-zero exit
+
+        # Launch as a non-blocking background process
+        self._vm_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Poll until VM status is "running" (or timeout)
+        for _ in range(30):  # up to ~30 seconds
+            time.sleep(1)
             info = self.get_vm_info()
-            if info.get("status") == "running":
+            status = info.get("status", "")
+            if status == "running":
                 return True
-            print_message(
-                f"Start failed\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}",
-                title="Lume Error",
-            )
-            return False
-        return True
+            if self._vm_process.poll() is not None:
+                # Process exited unexpectedly
+                print_message(
+                    f"lume run process exited with code {self._vm_process.returncode}",
+                    title="Lume Error",
+                )
+                return False
+        print_message("Timeout waiting for VM to reach 'running' state", title="Lume Error")
+        return False
 
     def stop_vm(self) -> bool:
         """Stop the VM."""
@@ -250,9 +297,18 @@ class LumeTools:
 
         # Step 5: Gather info
         vnc_port = self.get_vnc_port()
+        full_info = self.get_vm_info()
+        vnc_url = full_info.get("vncUrl", "")
+        vnc_password = None
+        if vnc_url:
+            import re
+            m = re.search(r"vnc://:(.+)@", vnc_url)
+            if m:
+                vnc_password = m.group(1)
         info = {
             "ip": ip,
             "vnc_port": vnc_port,
+            "vnc_password": vnc_password,
             "vm_name": self.vm_name,
         }
         print_message(

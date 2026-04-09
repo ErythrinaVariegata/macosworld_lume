@@ -1,0 +1,10 @@
+vncdotool==1.2.0
+boto3==1.36.20
+sshtunnel
+httpx[socks]
+openai
+anthropic
+google-auth
+google_cloud_aiplatform
+jupyter
+pillow

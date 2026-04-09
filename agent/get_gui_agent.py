@@ -77,4 +77,36 @@ def get_gui_agent(gui_agent_name, remote_client):
             temperature = 1.0,
             safety_config = GEMINI_SAFETY_CONFIG
         )
+    elif "qwen" in gui_agent_name:
+        # Qwen2.5-VL model via remote OpenAI-compatible API
+        # Pass "qwen/<model_name>" as gui_agent_name (e.g. "qwen/Qwen2.5-VL-7B-Instruct")
+        # Requires MODEL_BASE_URL and MODEL_API_KEY environment variables
+        from agent.qwen import Qwen_GUI_AGENT, QWEN_SYSTEM_PROMPT
+        model_name = "qwen/Qwen2.5-VL-7B-Instruct" # just a placeholder
+        if gui_agent_name.startswith("qwen/"):
+            model_name = gui_agent_name[len("qwen/"):]
+        return Qwen_GUI_AGENT(
+            model = model_name,
+            system_prompt = QWEN_SYSTEM_PROMPT,
+            remote_client = remote_client,
+            only_n_most_recent_images = 3,
+            max_tokens = 12800,
+            top_p = 0.9,
+            temperature = 1.0,
+        )
+    elif "tione" in gui_agent_name:
+        # TiOne OpenAI-compatible model: pass "tione" as gui_agent_name
+        # Requires MODEL_BASE_URL and MODEL_API_KEY environment variables
+        from agent.tione import TiOne_GUI_Agent, TIONE_SYSTEM_PROMPT
+        model_name = "/data/model" # hardcode, this is not a placeholder
+        if gui_agent_name.startswith("tione/"):
+            model_name = gui_agent_name[len("tione/"):]
+        return TiOne_GUI_Agent(
+            model = model_name,
+            system_prompt = TIONE_SYSTEM_PROMPT,
+            remote_client = remote_client,
+            screenshot_rolling_window = 3,
+            top_p = 0.9,
+            temperature = 1.0
+        )
     raise NotImplementedError(f'Agent "{gui_agent_name}" not implemented')
