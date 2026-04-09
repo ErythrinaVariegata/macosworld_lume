@@ -20,6 +20,8 @@ parser.add_argument('--ssh_host', type=str, default=None)
 parser.add_argument('--ssh_pkey', type=str, default='credential.pem')
 parser.add_argument('--instance_id', type=str)
 parser.add_argument('--vmx_path', type=str, default=None)
+parser.add_argument('--lume_golden_vm', type=str, default=None,
+                    help='Enable Lume mode. Prefix for golden VM names (e.g., "golden").')
 
 parser.add_argument('--snapshot_recovery_timeout_seconds', type=int, default=120)
 parser.add_argument('--override_env_reset', action='store_true')
@@ -39,8 +41,15 @@ parser.add_argument('--port', type=int, default=None)
 arguments = parser.parse_args()
 
 
-if arguments.instance_id is None and arguments.vmx_path is None:
-    raise ValueError(f'Either `instance_id` or `vmx_path` must be provided')
+if arguments.instance_id is None and arguments.vmx_path is None and arguments.lume_golden_vm is None:
+    raise ValueError(f'Either `instance_id`, `vmx_path`, or `lume_golden_vm` must be provided')
+
+# Auto-set Lume defaults if guest credentials were not explicitly changed
+if arguments.lume_golden_vm is not None:
+    if arguments.guest_username == 'ec2-user':
+        arguments.guest_username = 'lume'
+    if arguments.guest_password == '000000':
+        arguments.guest_password = 'lume'
 
 
 
@@ -135,6 +144,8 @@ for task_language, env_language in language_combinations:
                     snapshot_recovery_timeout_seconds = arguments.snapshot_recovery_timeout_seconds,
                     override_env_reset = arguments.override_env_reset,
                     vmx_path = arguments.vmx_path,
+
+                    lume_golden_vm = arguments.lume_golden_vm,
 
                     guest_username = arguments.guest_username,
                     guest_password = arguments.guest_password,

@@ -1,0 +1,262 @@
+import json
+import subprocess
+import time
+import uuid
+
+from utils.log import print_message
+
+
+class LumeTools:
+    """Lume VM management tools, replacing VMwareTools for Apple Silicon Macs."""
+
+    def __init__(
+        self,
+        vm_name: str,
+        guest_username: str = "lume",
+        guest_password: str = "lume",
+        vnc_password: str = None,
+    ):
+        self.vm_name = vm_name
+        self.guest_username = guest_username
+        self.guest_password = guest_password
+        self.vnc_password = vnc_password
+
+    @staticmethod
+    def _run_lume_command(args: list, timeout: int = 300) -> subprocess.CompletedProcess:
+        """Run a lume CLI command and return the result."""
+        cmd = ["lume"] + args
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def get_vm_info(self) -> dict:
+        """Get VM information (IP, VNC port, status, etc.) as a dict.
+
+        Returns a dict parsed from ``lume get <name> -f json``.
+        """
+        result = self._run_lume_command(["get", self.vm_name, "-f", "json"])
+        if result.returncode != 0:
+            print_message(
+                f"Failed to get VM info for {self.vm_name}\n"
+                f"STDOUT: {result.stdout}\nSTDERR: {result.stderr}",
+                title="Lume Error",
+            )
+            return {}
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            print_message(
+                f"Failed to parse VM info JSON: {result.stdout}",
+                title="Lume Error",
+            )
+            return {}
+
+    def clone_from_golden(self, golden_vm_name: str) -> bool:
+        """Clone a new VM from a golden (template) VM.
+
+        The golden VM must be in a stopped state.
+
+        Returns True on success.
+        """
+        print_message(
+            f'Cloning "{golden_vm_name}" → "{self.vm_name}"',
+            title="Lume",
+        )
+        result = self._run_lume_command(["clone", golden_vm_name, self.vm_name])
+        if result.returncode != 0:
+            print_message(
+                f"Clone failed\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}",
+                title="Lume Error",
+            )
+            return False
+        return True
+
+    def start_vm(self) -> bool:
+        """Start the VM in headless mode (no display).
+
+        Returns True on success.
+        """
+        print_message(f'Starting VM "{self.vm_name}"', title="Lume")
+        cmd = ["run", self.vm_name, "--no-display"]
+        if self.vnc_password is not None:
+            cmd += ["--vnc-password", self.vnc_password]
+        result = self._run_lume_command(cmd, timeout=120)
+        # lume run may block until VM shuts down in some versions;
+        # in newer versions it returns immediately in --no-display mode.
+        if result.returncode != 0:
+            # Check if the VM actually started despite the non-zero exit
+            info = self.get_vm_info()
+            if info.get("status") == "running":
+                return True
+            print_message(
+                f"Start failed\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}",
+                title="Lume Error",
+            )
+            return False
+        return True
+
+    def stop_vm(self) -> bool:
+        """Stop the VM."""
+        print_message(f'Stopping VM "{self.vm_name}"', title="Lume")
+        result = self._run_lume_command(["stop", self.vm_name], timeout=60)
+        if result.returncode != 0:
+            print_message(
+                f"Stop failed\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}",
+                title="Lume Warning",
+            )
+            return False
+        return True
+
+    def delete_vm(self) -> bool:
+        """Delete the VM forcefully."""
+        print_message(f'Deleting VM "{self.vm_name}"', title="Lume")
+        result = self._run_lume_command(["delete", self.vm_name, "--force"], timeout=60)
+        if result.returncode != 0:
+            print_message(
+                f"Delete failed\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}",
+                title="Lume Warning",
+            )
+            return False
+        return True
+
+    def stop_and_cleanup(self):
+        """Stop the VM and delete it. Best-effort; logs warnings on failure."""
+        self.stop_vm()
+        # Give the VM a moment to fully shut down
+        time.sleep(2)
+        self.delete_vm()
+
+    def wait_for_ip(self, timeout_seconds: int = 120, poll_interval: int = 5) -> str | None:
+        """Poll ``lume get`` until the VM has an IP address.
+
+        Returns the IP address string, or None on timeout.
+        """
+        print_message(
+            f'Waiting for VM "{self.vm_name}" to obtain an IP address',
+            title="Lume",
+        )
+        start = time.time()
+        while time.time() - start < timeout_seconds:
+            info = self.get_vm_info()
+            ip = info.get("ip") or info.get("ipAddress")
+            status = info.get("status", "")
+            if ip and ip not in ("", "0.0.0.0", "N/A"):
+                print_message(f"VM IP: {ip}", title="Lume")
+                return ip
+            if status in ("stopped", "error"):
+                print_message(f"VM entered unexpected state: {status}", title="Lume Error")
+                return None
+            time.sleep(poll_interval)
+        print_message("Timeout waiting for VM IP", title="Lume Error")
+        return None
+
+    def get_vnc_port(self) -> int | None:
+        """Retrieve the VNC port from ``lume get``."""
+        info = self.get_vm_info()
+        port = info.get("vncPort") or info.get("vnc_port") or info.get("vncUrl")
+        if port is None:
+            return None
+        # If port is a URL like vnc://localhost:5901, extract the port
+        if isinstance(port, str) and ":" in port:
+            try:
+                return int(port.rsplit(":", 1)[-1])
+            except ValueError:
+                return None
+        try:
+            return int(port)
+        except (ValueError, TypeError):
+            return None
+
+    def check_ssh_connectivity(self) -> bool:
+        """Check SSH connectivity via ``lume ssh``."""
+        try:
+            result = self._run_lume_command(
+                [
+                    "ssh", self.vm_name, "echo ok",
+                    "-u", self.guest_username,
+                    "-p", self.guest_password,
+                    "-t", "15",
+                ],
+                timeout=30,
+            )
+            return result.returncode == 0 and "ok" in result.stdout
+        except subprocess.TimeoutExpired:
+            return False
+        except Exception:
+            return False
+
+    def run_ssh_command(self, command: str) -> tuple:
+        """Execute a command on the guest via ``lume ssh``.
+
+        Returns (success: bool, output: str).
+        """
+        try:
+            result = self._run_lume_command(
+                [
+                    "ssh", self.vm_name, command,
+                    "-u", self.guest_username,
+                    "-p", self.guest_password,
+                    "-t", "0",  # no timeout
+                ],
+                timeout=300,
+            )
+            if result.returncode == 0:
+                return True, result.stdout.strip()
+            return False, result.stderr.strip() or result.stdout.strip()
+        except subprocess.TimeoutExpired as e:
+            return False, str(e)
+        except Exception as e:
+            return False, str(e)
+
+    def clone_and_start(
+        self,
+        golden_vm_name: str,
+        timeout_seconds: int = 120,
+    ) -> tuple:
+        """Clone from a golden VM, start it, and wait until ready.
+
+        Returns (success: bool, vm_info: dict).
+        ``vm_info`` contains ``ip``, ``vnc_port``, and the full info dict.
+        """
+        # Step 1: Clone
+        if not self.clone_from_golden(golden_vm_name):
+            return False, {}
+
+        # Step 2: Start
+        if not self.start_vm():
+            self.delete_vm()
+            return False, {}
+
+        # Step 3: Wait for IP
+        ip = self.wait_for_ip(timeout_seconds=timeout_seconds)
+        if ip is None:
+            self.stop_and_cleanup()
+            return False, {}
+
+        # Step 4: Wait for SSH
+        print_message(f"Waiting for SSH connectivity on {ip}", title="Lume")
+        ssh_start = time.time()
+        while time.time() - ssh_start < timeout_seconds:
+            if self.check_ssh_connectivity():
+                break
+            time.sleep(5)
+        else:
+            print_message("Timeout waiting for SSH", title="Lume Error")
+            self.stop_and_cleanup()
+            return False, {}
+
+        # Step 5: Gather info
+        vnc_port = self.get_vnc_port()
+        info = {
+            "ip": ip,
+            "vnc_port": vnc_port,
+            "vm_name": self.vm_name,
+        }
+        print_message(
+            f"VM ready: IP={ip}, VNC port={vnc_port}",
+            title="Lume",
+        )
+        return True, info

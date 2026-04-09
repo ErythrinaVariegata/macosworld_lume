@@ -14,6 +14,8 @@ parser.add_argument('--ssh_host', type=str, default=None)
 parser.add_argument('--ssh_pkey', type=str, default='credential.pem')
 parser.add_argument('--instance_id', type=str)
 parser.add_argument('--vmx_path', type=str, default=None)
+parser.add_argument('--lume_golden_vm', type=str, default=None,
+                    help='Enable Lume mode. Prefix for golden VM names (e.g., "golden").')
 
 parser.add_argument('--snapshot_recovery_timeout_seconds', type=int, default=120)
 parser.add_argument('--override_env_reset', action='store_true')
@@ -63,6 +65,8 @@ while True:
     # pass simple scalar arguments when present
     if args.vmx_path:
         cmd += ["--vmx_path", args.vmx_path]
+    if args.lume_golden_vm:
+        cmd += ["--lume_golden_vm", args.lume_golden_vm]
     if args.ssh_host:
         cmd += ["--ssh_host", args.ssh_host]
     if args.ssh_pkey:

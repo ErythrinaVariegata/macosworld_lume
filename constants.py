@@ -24,3 +24,19 @@ env_init_command = """find /Library/Logs/DiagnosticReports -type f -name "panic*
 # The second command removes excess hard drives to avoid their super-long name alters Finder's layout
 
 eval_init_command = """osascript -e 'tell application "System Events" to get value of attribute "AXFullScreen" of window 1 of (first application process whose frontmost is true)' | grep -q true && osascript -e 'tell application "System Events" to keystroke "f" using {control down, command down}' """
+
+# Lume golden VM name mapping: snapshot_name -> golden VM name
+# Each golden VM is a pre-configured, stopped VM that serves as the template
+# for clone-based environment reset (replacing VMware snapshot revert).
+lume_snapshot_lookup = {
+    'snapshot_used_en': 'golden_used_en',
+    'snapshot_used_zh': 'golden_used_zh',
+    'snapshot_used_ar': 'golden_used_ar',
+    'snapshot_used_ja': 'golden_used_ja',
+    'snapshot_used_ru': 'golden_used_ru',
+    'snapshot_usedApps_en': 'golden_usedApps_en',
+    'snapshot_usedApps_zh': 'golden_usedApps_zh',
+    'snapshot_usedApps_ar': 'golden_usedApps_ar',
+    'snapshot_usedApps_ja': 'golden_usedApps_ja',
+    'snapshot_usedApps_ru': 'golden_usedApps_ru',
+}

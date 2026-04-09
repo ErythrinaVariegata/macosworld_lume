@@ -1,4 +1,5 @@
 import os
+import uuid
 import boto3
 import time
 
@@ -46,7 +47,7 @@ def run_task(
     vmx_path: str,
 
     # Remote connection
-    guest_username: str, 
+    guest_username: str,
     guest_password: str,
     ssh_host: str,
     ssh_pkey: str,
@@ -60,6 +61,9 @@ def run_task(
     pre_command_max_trials: int,
     env_init_command: str,
     eval_init_command: str,
+
+    # Lume params (optional)
+    lume_golden_vm: str = None,
 ):
     task_uuid = task_dict["id"]
     task_id = task_id
@@ -76,9 +80,60 @@ def run_task(
 
     # Env reset
     cumulative_waiting_time = 0
+    lume_tools = None  # Track Lume VM for cleanup
+
     if override_env_reset:
         print('Please manually reset the environment. Press `c` to continue.')
         breakpoint()
+    elif lume_golden_vm is not None:
+        # Lume env (Apple Silicon Mac)
+        from utils.lume_utils import LumeTools
+        from utils.VNCClient import VNCClient_Lume
+        from constants import lume_snapshot_lookup
+
+        golden_vm_name = lume_snapshot_lookup.get(snapshot_name)
+        if golden_vm_name is None:
+            raise ValueError(
+                f"No Lume golden VM mapping for snapshot '{snapshot_name}'. "
+                f"Available mappings: {list(lume_snapshot_lookup.keys())}"
+            )
+
+        task_vm_name = f"macosworld_{uuid.uuid4().hex[:8]}"
+        lume_tools = LumeTools(
+            vm_name=task_vm_name,
+            guest_username=guest_username,
+            guest_password=guest_password,
+        )
+
+        clone_max_trials = 3
+        clone_success = False
+        vm_info = {}
+        for trial in range(1, clone_max_trials + 1):
+            if trial > 1:
+                print_message(f'Retrying Lume clone+start... ({trial}/{clone_max_trials})')
+                # Clean up previous failed attempt
+                lume_tools.stop_and_cleanup()
+                task_vm_name = f"macosworld_{uuid.uuid4().hex[:8]}"
+                lume_tools = LumeTools(
+                    vm_name=task_vm_name,
+                    guest_username=guest_username,
+                    guest_password=guest_password,
+                )
+            clone_success, vm_info = lume_tools.clone_and_start(
+                golden_vm_name,
+                timeout_seconds=snapshot_recovery_timeout_seconds,
+            )
+            if clone_success:
+                break
+
+        if not clone_success:
+            raise RuntimeError(
+                f"Failed to clone and start Lume VM from '{golden_vm_name}' after {clone_max_trials} attempts"
+            )
+
+        ssh_host = vm_info["ip"]
+        print_message(f'Lume VM started: {task_vm_name} at {ssh_host}', title='Lume')
+
     elif vmx_path is not None:
         # VMware env
         snapshot_revert_max_trials = 5
@@ -126,13 +181,23 @@ def run_task(
 
     # Establish remote connection
 
-    remote_client = VNCClient_SSH(
-        guest_username = guest_username, 
-        guest_password = guest_password, 
-        ssh_host = ssh_host,
-        ssh_pkey = ssh_pkey,
-        vmx_path = vmx_path
-    )
+    if lume_golden_vm is not None:
+        # Lume mode: direct VNC, no SSH tunnel
+        remote_client = VNCClient_Lume(
+            vm_name=lume_tools.vm_name,
+            guest_username=guest_username,
+            guest_password=guest_password,
+            vnc_port=vm_info.get("vnc_port"),
+            vnc_password=vm_info.get("vnc_password"),
+        )
+    else:
+        remote_client = VNCClient_SSH(
+            guest_username = guest_username,
+            guest_password = guest_password,
+            ssh_host = ssh_host,
+            ssh_pkey = ssh_pkey,
+            vmx_path = vmx_path
+        )
 
     print_message(f'Checking ssh connectivity to {ssh_host}', title = 'VNC Client')
     while True:
@@ -185,7 +250,11 @@ def run_task(
             
     inprocess_event_handler = None
     if 'in_process' in task_dict:
-        inprocess_event_handler = AsyncSSHCommandHandler(ssh_host, guest_username, ssh_pkey)
+        if lume_golden_vm is not None:
+            from utils.lume_adapters import LumeAsyncSSHCommandHandler
+            inprocess_event_handler = LumeAsyncSSHCommandHandler(lume_tools.vm_name, guest_username, guest_password)
+        else:
+            inprocess_event_handler = AsyncSSHCommandHandler(ssh_host, guest_username, ssh_pkey)
         inprocess_command, inprocess_event_start_timestep, inprocess_gold_elements, inprocess_distracting_elements = task_dict['in_process']
 
     if 'before_action_delay_seconds' in task_dict:
@@ -287,7 +356,11 @@ def run_task(
             print_message(f'Waiting for {before_grading_delay_seconds}s before grading', title = f'Task {task_id}/{env_language}/{task_language}')
             time.sleep(before_grading_delay_seconds)
 
-    evaluator = Evaluator(ssh_host, guest_username, ssh_pkey)
+    if lume_golden_vm is not None:
+        from utils.lume_adapters import LumeEvaluator
+        evaluator = LumeEvaluator(lume_tools.vm_name, guest_username, guest_password)
+    else:
+        evaluator = Evaluator(ssh_host, guest_username, ssh_pkey)
     evaluator.run_command(eval_init_command)
 
     eval_result = evaluator(task_dict["grading_command"])
@@ -311,3 +384,10 @@ def run_task(
         remote_client.disconnect()
     except Exception as e:
         print_message(title = 'VNC Client', content = f'Error disconnecting: {e}')
+
+    # Lume cleanup: stop and delete the cloned VM
+    if lume_tools is not None:
+        try:
+            lume_tools.stop_and_cleanup()
+        except Exception as e:
+            print_message(title='Lume', content=f'Error during cleanup: {e}')

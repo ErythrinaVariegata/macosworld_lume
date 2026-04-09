@@ -452,3 +452,275 @@ class VNCClient_SSH:
         if self.client is None:
             self.connect()
 
+
+class VNCClient_Lume:
+    """VNC client for Lume-managed macOS VMs.
+
+    Unlike VNCClient_SSH, this class connects directly to the VNC port
+    exposed by Lume on the host (no SSH tunnel needed).  SSH commands
+    are executed via ``lume ssh``.
+    """
+
+    def __init__(
+        self,
+        vm_name: str,
+        guest_username: str = "lume",
+        guest_password: str = "lume",
+        vnc_port: int | None = None,
+        vnc_password: str | None = None,
+        retry_attempts: int = 3,
+        retry_delay: int = 5,
+        action_interval_seconds: int = 1,
+        vnc_connection_timeout: int = 600,
+    ):
+        from utils.lume_utils import LumeTools
+
+        self.vm_name = vm_name
+        self.guest_username = guest_username
+        self.guest_password = guest_password
+        self.vnc_port = vnc_port
+        self.vnc_password = vnc_password
+        self.client = None
+        self.retry_attempts = retry_attempts
+        self.retry_delay = retry_delay
+        self.action_interval_seconds = action_interval_seconds
+        self.vnc_connection_timeout = vnc_connection_timeout
+
+        self.lume_tools = LumeTools(
+            vm_name=vm_name,
+            guest_username=guest_username,
+            guest_password=guest_password,
+            vnc_password=vnc_password,
+        )
+
+    def check_ssh_connectivity(self) -> bool:
+        """Check SSH connectivity via lume ssh."""
+        return self.lume_tools.check_ssh_connectivity()
+
+    def run_ssh_command(self, command: str) -> tuple:
+        """Execute a command on the guest via lume ssh."""
+        return self.lume_tools.run_ssh_command(command)
+
+    def connect(self):
+        """Connect to the Lume VNC server directly (no SSH tunnel)."""
+        # Resolve VNC port if not provided
+        if self.vnc_port is None:
+            self.vnc_port = self.lume_tools.get_vnc_port()
+        if self.vnc_port is None:
+            raise ConnectionError(
+                f"Cannot determine VNC port for VM '{self.vm_name}'. "
+                "Ensure the VM is running."
+            )
+
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                print_message(
+                    title="VNC Client (Lume)",
+                    content=f"Connecting to localhost:{self.vnc_port} (attempt {attempt})",
+                )
+                self.client = api.connect(
+                    f"localhost::{self.vnc_port}",
+                    password=self.vnc_password or "",
+                    timeout=self.vnc_connection_timeout,
+                )
+                return
+            except Exception as e:
+                print_message(
+                    title="VNC Client (Lume)",
+                    content=f"Connection attempt {attempt} failed: {e}",
+                )
+                if attempt < self.retry_attempts:
+                    time.sleep(self.retry_delay)
+                else:
+                    raise ConnectionError(
+                        "Failed to connect to Lume VNC server after multiple attempts."
+                    )
+
+    def capture_screenshot(self):
+        """Capture a screenshot via VNC and return as a PIL Image."""
+        self._ensure_connection()
+        fp = io.BytesIO()
+        fp.name = "screenshot.png"
+        self.client.captureScreen(fp)
+        fp.seek(0)
+        image = Image.open(fp)
+        del fp
+        return image
+
+    def mouse_down(self, button):
+        """Press and hold a specified mouse button."""
+        self._ensure_connection()
+        btn_map = {"left": 1, "middle": 2, "right": 3}
+        self.client.mouseDown(btn_map.get(button.lower(), 1))
+
+    def mouse_up(self, button):
+        """Release a specified mouse button."""
+        self._ensure_connection()
+        btn_map = {"left": 1, "middle": 2, "right": 3}
+        self.client.mouseUp(btn_map.get(button.lower(), 1))
+
+    def left_click(self):
+        """Perform a left mouse click."""
+        self._ensure_connection()
+        self.client.mouseDown(1)
+        self.client.mouseUp(1)
+
+    def middle_click(self):
+        """Perform a middle mouse click."""
+        self._ensure_connection()
+        self.client.mouseDown(2)
+        self.client.mouseUp(2)
+
+    def right_click(self):
+        """Perform a right mouse click."""
+        self._ensure_connection()
+        self.client.mouseDown(3)
+        self.client.mouseUp(3)
+
+    def double_click(self):
+        """Perform a double left mouse click."""
+        self._ensure_connection()
+        self.client.mouseDown(1)
+        self.client.mouseUp(1)
+        self.client.mouseDown(1)
+        self.client.mouseUp(1)
+
+    def triple_click(self):
+        """Perform a triple left mouse click."""
+        self._ensure_connection()
+        for _ in range(3):
+            self.client.mouseDown(1)
+            self.client.mouseUp(1)
+
+    def drag_to(self, x, y):
+        """Perform a drag action to normalised coordinates (x, y)."""
+        self._ensure_connection()
+        if self.client.screen is None:
+            _ = self.capture_screenshot()
+        x_scaled = int(round(x * (self.client.screen.width - 1)))
+        y_scaled = int(round(y * (self.client.screen.height - 1)))
+        self.client.mouseDown(1)
+        self.client.mouseMove(x_scaled, y_scaled)
+        self.client.mouseUp(1)
+
+    def scroll_down(self, amount, by_pixel=False):
+        """Scroll down by amount (proportion 0-1, or pixels if by_pixel)."""
+        self._ensure_connection()
+        scaled = amount if by_pixel else int(round(amount * self.client.screen.height))
+        for _ in range(max(0, scaled)):
+            self.client.mouseDown(5)
+            self.client.mouseUp(5)
+
+    def scroll_up(self, amount, by_pixel=False):
+        """Scroll up by amount (proportion 0-1, or pixels if by_pixel)."""
+        self._ensure_connection()
+        scaled = amount if by_pixel else int(round(amount * self.client.screen.height))
+        for _ in range(max(0, scaled)):
+            self.client.mouseDown(4)
+            self.client.mouseUp(4)
+
+    def scroll_left(self, amount, by_pixel=False):
+        """Scroll left by amount (proportion 0-1, or pixels if by_pixel)."""
+        self._ensure_connection()
+        scaled = amount if by_pixel else int(round(amount * self.client.screen.width))
+        for _ in range(max(0, scaled)):
+            self.client.mouseDown(6)
+            self.client.mouseUp(6)
+
+    def scroll_right(self, amount, by_pixel=False):
+        """Scroll right by amount (proportion 0-1, or pixels if by_pixel)."""
+        self._ensure_connection()
+        scaled = amount if by_pixel else int(round(amount * self.client.screen.width))
+        for _ in range(max(0, scaled)):
+            self.client.mouseDown(7)
+            self.client.mouseUp(7)
+
+    def move_to(self, x, y):
+        """Move mouse to normalised coordinates (x, y) in [0, 1]."""
+        self._ensure_connection()
+        if self.client.screen is None:
+            _ = self.capture_screenshot()
+        x_scaled = int(round(x * (self.client.screen.width - 1)))
+        y_scaled = int(round(y * (self.client.screen.height - 1)))
+        x_scaled = max(0, min(self.client.screen.width, x_scaled))
+        y_scaled = max(0, min(self.client.screen.height, y_scaled))
+        self.client.mouseMove(x_scaled, y_scaled)
+
+    def move_to_pixel(self, x, y):
+        """Move mouse to pixel coordinates (x, y)."""
+        self._ensure_connection()
+        self.client.mouseMove(x, y)
+
+    def key_press(self, key):
+        """Press a key on the keyboard."""
+        key = self._filter_key(key)
+        if key is None:
+            return
+        self._ensure_connection()
+        self.client.keyPress(key)
+
+    def key_press_and_hold(self, key, duration_seconds: int):
+        """Press and hold a key for duration_seconds before releasing."""
+        key = self._filter_key(key)
+        if key is None:
+            return
+        self._ensure_connection()
+        self.client.keyDown(key)
+        time.sleep(duration_seconds)
+        self.client.keyUp(key)
+
+    def type_text(self, text):
+        """Type a string of ASCII characters."""
+        text = self._filter_text(text)
+        if text is None:
+            return
+        self._ensure_connection()
+        for char in text:
+            self.client.keyPress(char)
+            time.sleep(0.1)
+
+    def disconnect(self):
+        """Disconnect from the VNC server."""
+        if self.client is not None:
+            self.client.disconnect()
+            self.client = None
+
+    def _filter_text(self, text):
+        if not isinstance(text, str):
+            return None
+        return "".join(char for char in text if ord(char) < 128)
+
+    def _filter_key(self, key):
+        if not isinstance(key, str):
+            return None
+        if len(key) == 0:
+            return None
+        if len(key) == 1:
+            return self._filter_text(key)
+
+        substrings = key.split("-")
+        processed_substrings = []
+
+        for substring in substrings:
+            if len(substring) >= 2:
+                substring = substring.lower()
+                if substring == "option":
+                    substring = "meta"
+                elif substring in ("command", "cmd"):
+                    substring = "alt"
+                elif substring == "backspace":
+                    substring = "bsp"
+                if substring in KEYMAP:
+                    processed_substrings.append(substring)
+            elif len(substring) == 1:
+                if ord(substring) < 128:
+                    processed_substrings.append(substring)
+
+        result = "-".join(processed_substrings)
+        return result if result else None
+
+    def _ensure_connection(self):
+        """Ensure VNC client is connected; reconnect if needed."""
+        if self.client is None:
+            self.connect()
+
