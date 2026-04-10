@@ -313,6 +313,138 @@ class LumeTools:
         except Exception as e:
             print_message(f"VNC unlock failed: {e}", title="Lume Warning")
 
+    def _prewarm_apps(self):
+        """Grant TCC permissions for osascript grading via VNC auto-Allow.
+
+        When ``sshd-keygen-wrapper`` triggers an osascript command, macOS may
+        show TCC permission dialogs.  If the golden VM was prepared with
+        ``scripts/prepare_golden_vm.sh``, no dialogs appear and this method
+        finishes almost instantly.  Otherwise, it triggers osascript probes
+        and auto-clicks "Allow" on each TCC dialog via keyboard (Tab + Space).
+        """
+        import subprocess as _sp
+
+        # Key grading apps that need TCC permissions
+        PROBES = [
+            # (label, osascript body)
+            ("Contacts:AE", 'tell application "Contacts" to return 1'),
+            ("Contacts:data", 'tell application "Contacts" to count every person'),
+            ("Reminders:AE", 'tell application "Reminders" to return 1'),
+            ("Reminders:data", 'tell application "Reminders" to count every list'),
+            ("Notes", 'tell application "Notes" to count every note'),
+            ("Music", 'tell application "Music" to return 1'),
+            ("SysEvents", 'tell application "System Events" to get the name of every process whose frontmost is true'),
+            ("Finder", 'tell application "Finder" to get the name of every window'),
+            ("Keynote", 'tell application "Keynote" to return 1'),
+            ("Numbers", 'tell application "Numbers" to return 1'),
+            ("Pages", 'tell application "Pages" to return 1'),
+            ("ScriptEditor", 'tell application "Script Editor" to return 1'),
+            ("QuickTime", 'tell application "QuickTime Player" to return 1'),
+        ]
+
+        print_message("Checking TCC permissions for osascript grading...", title="Lume")
+
+        # Quick check: if Contacts data query works, golden VM was prepared
+        ok, _ = self.run_ssh_command(
+            "osascript -e 'tell application \"Contacts\" to count every person'"
+        )
+        if ok:
+            print_message("TCC permissions already granted (golden VM prepared)", title="Lume")
+            # Quit any apps that launched during the probe
+            self.run_ssh_command(
+                "osascript -e 'tell application \"Contacts\" to quit' 2>/dev/null"
+            )
+            return
+
+        # TCC permissions NOT yet granted — auto-grant via VNC
+        print_message("TCC permissions needed — auto-granting via VNC...", title="Lume")
+
+        # Kill akd to avoid iCloud sign-in prompts
+        self.run_ssh_command("killall akd 2>/dev/null")
+
+        # Connect VNC
+        vnc_port = self.get_vnc_port()
+        full_info = self.get_vm_info()
+        vnc_url = full_info.get("vncUrl", "")
+        vnc_password = None
+        if vnc_url:
+            import re as _re
+            m = _re.search(r"vnc://:(.+)@", vnc_url)
+            if m:
+                vnc_password = m.group(1)
+
+        if vnc_port is None:
+            print_message("Cannot auto-grant TCC: VNC port unknown", title="Lume Warning")
+            return
+
+        try:
+            from vncdotool import api
+            vnc_client = api.connect(
+                f"localhost::{vnc_port}",
+                password=vnc_password or "",
+                timeout=30,
+            )
+        except Exception as e:
+            print_message(f"VNC connect failed for TCC granting: {e}", title="Lume Warning")
+            return
+
+        for label, script in PROBES:
+            # Fire a non-blocking osascript (may trigger TCC dialog)
+            probe_proc = _sp.Popen(
+                [
+                    "lume", "ssh", self.vm_name,
+                    f"osascript -e '{script}' 2>/dev/null",
+                    "-u", self.guest_username,
+                    "-p", self.guest_password,
+                    "-t", "10",
+                ],
+                stdout=_sp.DEVNULL,
+                stderr=_sp.DEVNULL,
+            )
+            time.sleep(2)
+
+            # Click "Allow" via Tab (focus) + Space (activate)
+            self._click_allow_button(vnc_client)
+
+            try:
+                probe_proc.wait(timeout=12)
+            except _sp.TimeoutExpired:
+                probe_proc.kill()
+
+        try:
+            vnc_client.disconnect()
+        except Exception:
+            pass
+
+        # Quit any apps that may have launched during probing
+        self.run_ssh_command(
+            "osascript -e 'tell application \"Contacts\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Reminders\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Notes\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Music\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Keynote\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Numbers\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Pages\" to quit' 2>/dev/null"
+        )
+
+        print_message("TCC permission granting complete", title="Lume")
+
+    @staticmethod
+    def _click_allow_button(vnc_client):
+        """Click the 'Allow' button on a TCC permission dialog via VNC.
+
+        Uses keyboard navigation: Tab moves focus to the "Allow" button,
+        then Space activates it.  This is more reliable than coordinate-based
+        mouse clicks because TCC dialog position varies.
+        """
+        try:
+            vnc_client.keyPress('tab')
+            time.sleep(0.3)
+            vnc_client.keyPress('space')
+            time.sleep(0.5)
+        except Exception:
+            pass  # best effort
+
     def clone_and_start(
         self,
         golden_vm_name: str,
@@ -352,6 +484,9 @@ class LumeTools:
 
         # Step 4.5: Dismiss Setup Assistant if present (clone triggers it)
         self._dismiss_setup_assistant()
+
+        # Step 4.6: Pre-warm iCloud-dependent apps to avoid osascript hangs
+        self._prewarm_apps()
 
         # Step 5: Gather info
         vnc_port = self.get_vnc_port()
