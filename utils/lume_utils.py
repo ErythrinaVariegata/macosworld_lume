@@ -246,15 +246,15 @@ class LumeTools:
                     "ssh", self.vm_name, command,
                     "-u", self.guest_username,
                     "-p", self.guest_password,
-                    "-t", "60",
+                    "-t", "30",
                 ],
-                timeout=120,
+                timeout=45,
             )
             if result.returncode == 0:
                 return True, result.stdout.strip()
             return False, result.stderr.strip() or result.stdout.strip()
-        except subprocess.TimeoutExpired as e:
-            return False, str(e)
+        except subprocess.TimeoutExpired:
+            return False, f"Command timed out"
         except Exception as e:
             return False, str(e)
 

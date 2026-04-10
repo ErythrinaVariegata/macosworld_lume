@@ -7,6 +7,9 @@ import os
 import signal
 import subprocess
 
+SSH_TIMEOUT = "30"          # lume ssh -t value (seconds)
+SUBPROCESS_TIMEOUT = 45     # subprocess.run hard kill (seconds)
+
 
 class LumeEvaluator:
     """Evaluator that executes grading commands via ``lume ssh``."""
@@ -24,17 +27,26 @@ class LumeEvaluator:
                     "lume", "ssh", self.vm_name, command,
                     "-u", self.ssh_username,
                     "-p", self.ssh_password,
-                    "-t", "60",
+                    "-t", SSH_TIMEOUT,
                 ],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=SUBPROCESS_TIMEOUT,
             )
             if result.returncode == 0:
                 return True, result.stdout.strip()
             return False, result.stderr.strip() or result.stdout.strip()
+        except subprocess.TimeoutExpired as e:
+            # Kill the hung lume ssh process
+            if hasattr(e, 'cmd'):
+                try:
+                    subprocess.run(["pkill", "-f", f"lume ssh {self.vm_name}"],
+                                   capture_output=True, timeout=5)
+                except Exception:
+                    pass
+            return False, f"Command timed out after {SUBPROCESS_TIMEOUT}s"
         except Exception as e:
-            return False, e
+            return False, str(e)
 
     def __call__(self, eval_configs: list, binary_grading: bool = True) -> int:
         filtered_eval_configs = (
@@ -76,7 +88,7 @@ class LumeAsyncSSHCommandHandler:
                 "lume", "ssh", self.vm_name, command,
                 "-u", self.ssh_username,
                 "-p", self.ssh_password,
-                "-t", "60",
+                "-t", "0",  # no timeout for async commands
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
