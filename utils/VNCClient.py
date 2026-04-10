@@ -493,6 +493,10 @@ class VNCClient_Lume:
             vnc_password=vnc_password,
         )
 
+        # Retina scale factor (set on first capture_screenshot)
+        self._retina_scale_x = 1.0
+        self._retina_scale_y = 1.0
+
     def check_ssh_connectivity(self) -> bool:
         """Check SSH connectivity via lume ssh."""
         return self.lume_tools.check_ssh_connectivity()
@@ -537,7 +541,17 @@ class VNCClient_Lume:
                     )
 
     def capture_screenshot(self):
-        """Capture a screenshot via VNC and return as a PIL Image."""
+        """Capture a screenshot via VNC and return as a PIL Image.
+
+        Lume VNC exposes Retina (2x) physical pixels, so a 1024x768
+        logical display yields a 2048x1536 raw capture.  We downscale
+        to the logical resolution so that:
+          - Agent prompts that mention 1024x768 stay correct
+          - Agents returning pixel coordinates (e.g. qwen computer_use)
+            produce values in the logical coordinate space
+        The VNC move/click methods also operate in the logical space
+        by applying the same scale factor.
+        """
         self._ensure_connection()
         fp = io.BytesIO()
         fp.name = "screenshot.png"
@@ -545,6 +559,18 @@ class VNCClient_Lume:
         fp.seek(0)
         image = Image.open(fp)
         del fp
+
+        # Detect Retina scale factor from VNC raw size vs configured display
+        from constants import SCREEN_WIDTH, SCREEN_HEIGHT
+        raw_w, raw_h = image.size
+        if raw_w > SCREEN_WIDTH or raw_h > SCREEN_HEIGHT:
+            self._retina_scale_x = raw_w / SCREEN_WIDTH
+            self._retina_scale_y = raw_h / SCREEN_HEIGHT
+            image = image.resize((SCREEN_WIDTH, SCREEN_HEIGHT), Image.LANCZOS)
+        else:
+            self._retina_scale_x = 1.0
+            self._retina_scale_y = 1.0
+
         return image
 
     def mouse_down(self, button):
@@ -647,9 +673,15 @@ class VNCClient_Lume:
         self.client.mouseMove(x_scaled, y_scaled)
 
     def move_to_pixel(self, x, y):
-        """Move mouse to pixel coordinates (x, y)."""
+        """Move mouse to pixel coordinates (x, y) in logical space.
+
+        If the VM uses Retina (2x), coordinates are scaled up to
+        physical VNC pixels automatically.
+        """
         self._ensure_connection()
-        self.client.mouseMove(x, y)
+        scale_x = getattr(self, '_retina_scale_x', 1.0)
+        scale_y = getattr(self, '_retina_scale_y', 1.0)
+        self.client.mouseMove(int(round(x * scale_x)), int(round(y * scale_y)))
 
     def key_press(self, key):
         """Press a key on the keyboard."""

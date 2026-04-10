@@ -203,7 +203,10 @@ class Qwen_GUI_AGENT:
             elif action == "left_click_drag":
                 coord = args.get("coordinate", [])
                 if coord and len(coord) == 2:
-                    parsed_actions.append({'func': 'drag_to', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+                    # drag_to expects normalised coords, so use mouse_down + move_to_pixel + mouse_up
+                    parsed_actions.append({'func': 'mouse_down', 'kwargs': {'button': 'left'}})
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+                    parsed_actions.append({'func': 'mouse_up', 'kwargs': {'button': 'left'}})
 
             elif action == "type":
                 text = args.get("text", "")
@@ -258,6 +261,10 @@ class Qwen_GUI_AGENT:
                     self.remote_client.middle_click()
                 elif act == 'move_to_pixel':
                     self.remote_client.move_to_pixel(**kwargs)
+                elif act == 'mouse_down':
+                    self.remote_client.mouse_down(**kwargs)
+                elif act == 'mouse_up':
+                    self.remote_client.mouse_up(**kwargs)
                 elif act == 'drag_to':
                     self.remote_client.drag_to(**kwargs)
                 elif act == 'type_text':
