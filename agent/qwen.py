@@ -203,10 +203,10 @@ class Qwen_GUI_AGENT:
             elif action == "left_click_drag":
                 coord = args.get("coordinate", [])
                 if coord and len(coord) == 2:
-                    # drag_to expects normalised coords, so use mouse_down + move_to_pixel + mouse_up
-                    parsed_actions.append({'func': 'mouse_down', 'kwargs': {'button': 'left'}})
-                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
-                    parsed_actions.append({'func': 'mouse_up', 'kwargs': {'button': 'left'}})
+                    parsed_actions.append({'func': 'drag_to', 'kwargs': {
+                        'x': int(coord[0]) / SCREEN_WIDTH,
+                        'y': int(coord[1]) / SCREEN_HEIGHT,
+                    }})
 
             elif action == "type":
                 text = args.get("text", "")
