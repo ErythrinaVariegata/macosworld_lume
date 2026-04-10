@@ -110,6 +110,7 @@ class TiOne_GUI_Agent:
         temperature: float,
     ):
         base_url = os.environ.get("MODEL_BASE_URL")
+        api_key = os.environ.get("MODEL_API_KEY", "empty")
 
         if not base_url:
             raise ValueError(
@@ -117,7 +118,7 @@ class TiOne_GUI_Agent:
                 "Set it to your OpenAI-compatible API endpoint."
             )
 
-        self.prompt_client = OpenAI(base_url=base_url)
+        self.prompt_client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.system_prompt = system_prompt
         self.remote_client = remote_client

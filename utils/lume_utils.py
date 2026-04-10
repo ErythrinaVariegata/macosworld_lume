@@ -246,9 +246,9 @@ class LumeTools:
                     "ssh", self.vm_name, command,
                     "-u", self.guest_username,
                     "-p", self.guest_password,
-                    "-t", "0",  # no timeout
+                    "-t", "60",
                 ],
-                timeout=300,
+                timeout=120,
             )
             if result.returncode == 0:
                 return True, result.stdout.strip()

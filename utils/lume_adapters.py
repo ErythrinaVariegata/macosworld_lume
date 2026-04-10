@@ -24,11 +24,11 @@ class LumeEvaluator:
                     "lume", "ssh", self.vm_name, command,
                     "-u", self.ssh_username,
                     "-p", self.ssh_password,
-                    "-t", "0",
+                    "-t", "60",
                 ],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=120,
             )
             if result.returncode == 0:
                 return True, result.stdout.strip()
@@ -76,7 +76,7 @@ class LumeAsyncSSHCommandHandler:
                 "lume", "ssh", self.vm_name, command,
                 "-u", self.ssh_username,
                 "-p", self.ssh_password,
-                "-t", "0",
+                "-t", "60",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
