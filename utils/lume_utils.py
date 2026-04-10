@@ -258,6 +258,61 @@ class LumeTools:
         except Exception as e:
             return False, str(e)
 
+    def _dismiss_setup_assistant(self):
+        """Dismiss Setup Assistant and ensure the desktop is ready.
+
+        After ``lume clone``, macOS may launch Setup Assistant due to
+        the new machine identity.  This method unconditionally:
+        1. Waits for the GUI to finish loading
+        2. Kills Setup Assistant and related processes (no-op if absent)
+        3. Unlocks the login screen via VNC if needed
+        """
+        print_message("Ensuring desktop is ready (dismissing any setup dialogs)...", title="Lume")
+        time.sleep(15)  # Wait for GUI to fully load after boot
+
+        # Kill Setup Assistant and helpers unconditionally (no-op if not running)
+        self.run_ssh_command("killall 'Setup Assistant' 2>/dev/null; killall mbuseragent 2>/dev/null; killall mbusertrampoline 2>/dev/null; killall mbsystemadministration 2>/dev/null")
+        time.sleep(3)
+
+        # Now we're at the lock screen — unlock via VNC
+        vnc_port = self.get_vnc_port()
+        full_info = self.get_vm_info()
+        vnc_url = full_info.get("vncUrl", "")
+        vnc_password = None
+        if vnc_url:
+            import re
+            m = re.search(r"vnc://:(.+)@", vnc_url)
+            if m:
+                vnc_password = m.group(1)
+
+        if vnc_port is None:
+            print_message("Cannot unlock: VNC port unknown", title="Lume Warning")
+            return
+
+        try:
+            from vncdotool import api
+            client = api.connect(
+                f"localhost::{vnc_port}",
+                password=vnc_password or "",
+                timeout=30,
+            )
+            time.sleep(1)
+
+            # Click on the password field area and type password
+            client.mouseMove(512, 500)
+            client.mouseDown(1)
+            client.mouseUp(1)
+            time.sleep(0.5)
+            for c in self.guest_password:
+                client.keyPress(c)
+                time.sleep(0.05)
+            client.keyPress("enter")
+            time.sleep(5)
+            client.disconnect()
+            print_message("Desktop unlocked", title="Lume")
+        except Exception as e:
+            print_message(f"VNC unlock failed: {e}", title="Lume Warning")
+
     def clone_and_start(
         self,
         golden_vm_name: str,
@@ -294,6 +349,9 @@ class LumeTools:
             print_message("Timeout waiting for SSH", title="Lume Error")
             self.stop_and_cleanup()
             return False, {}
+
+        # Step 4.5: Dismiss Setup Assistant if present (clone triggers it)
+        self._dismiss_setup_assistant()
 
         # Step 5: Gather info
         vnc_port = self.get_vnc_port()
