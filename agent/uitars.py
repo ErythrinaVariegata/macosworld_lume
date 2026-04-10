@@ -359,11 +359,9 @@ class UITARS_GUI_AGENT:
                 except Exception as e:
                     print(f"Error parsing coordinates in '{func_name}({params_str})': {e}")
                     continue
-                # Create actions: move_to_pixel to start, then mouse_down + move_to_pixel to end + mouse_up
+                # Create two actions: move_to_pixel to the start coord, then drag_to to the end coord.
                 parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': start_coord[0], 'y': start_coord[1]}})
-                parsed_actions.append({'func': 'mouse_down', 'kwargs': {'button': 'left'}})
-                parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': end_coord[0], 'y': end_coord[1]}})
-                parsed_actions.append({'func': 'mouse_up', 'kwargs': {'button': 'left'}})
+                parsed_actions.append({'func': 'drag_to', 'kwargs': {'x': end_coord[0], 'y': end_coord[1]}})
             elif func_name_lower == "hotkey":
                 if 'key' not in kwargs:
                     print(f"Error parsing '{func_name}({params_str})': Missing 'key'.")
@@ -421,10 +419,6 @@ class UITARS_GUI_AGENT:
                     self.remote_client.right_click()
                 elif act == 'move_to_pixel':
                     self.remote_client.move_to_pixel(**kwargs)
-                elif act == 'mouse_down':
-                    self.remote_client.mouse_down(**kwargs)
-                elif act == 'mouse_up':
-                    self.remote_client.mouse_up(**kwargs)
                 elif act == 'drag_to':
                     self.remote_client.drag_to(**kwargs)
                 elif act == 'type_text':
