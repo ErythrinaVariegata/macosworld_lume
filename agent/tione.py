@@ -184,17 +184,69 @@ class TiOne_GUI_Agent:
             screenshots[-1]
         ]
     
+    def _preprocess_xml_output(self, agent_output: str) -> str:
+        """Convert XML-style model output to plain text action format.
+
+        Handles two variants the model produces:
+          Variant 1 (inline):  <action_name> key_press command-c
+          Variant 2 (nested):  <action_name>type_text\\n<parameter=text>\\nhello\\n</parameter>\\n</action_name>
+
+        Returns plain text lines like:
+          key_press command-c
+          type_text hello
+        """
+        import re
+
+        # If no XML tags at all, return as-is (already plain text)
+        if '<action_name>' not in agent_output:
+            return agent_output
+
+        result_lines = []
+
+        # Split by <action_name> blocks
+        blocks = re.split(r'<action_name>\s*', agent_output)
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+
+            # Remove closing tags
+            block = re.sub(r'</action_name>', '', block)
+            block = re.sub(r'</action_code>', '', block)
+
+            # Check for nested parameter format: <parameter=key>\nvalue\n</parameter>
+            param_match = re.search(r'<parameter[=_](\w+)>\s*(.*?)\s*</parameter>', block, re.DOTALL)
+            if param_match:
+                action_cmd = block[:block.index('<')].strip()
+                param_value = param_match.group(2).strip()
+                if action_cmd and param_value:
+                    result_lines.append(f"{action_cmd} {param_value}")
+                elif action_cmd:
+                    result_lines.append(action_cmd)
+            else:
+                # Inline format: just the action and params on one line
+                # Clean up any remaining XML-like tags
+                clean = re.sub(r'<[^>]*>', '', block).strip()
+                if clean:
+                    result_lines.append(clean)
+
+        return '\n'.join(result_lines)
+
     def parse_agent_output(self, agent_output):
         """
         Parse the raw output string from the GUI agent into a list of actions.
         Each action is a dict with an "action" key and any required parameters.
-        
+
         This function is robust to:
+        - XML-style <action_name> tags from the model
         - Extra surrounding backticks or triple backticks
         - Extra spaces and non-action text lines
         - Parameters provided with "key=value" format
         - Incomplete or misformatted lines (which will print an error and skip that line)
         """
+        # Preprocess XML-style output to plain text
+        agent_output = self._preprocess_xml_output(agent_output)
+
         valid_actions = {"move_to", "left_click", "middle_click", "right_click", "double_click",
                         "scroll_down", "scroll_up", "type_text", "key_press", "wait", "fail", "done"}
         actions = []
