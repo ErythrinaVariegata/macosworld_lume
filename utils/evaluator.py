@@ -1,5 +1,8 @@
 import subprocess
-import sys
+
+# Timeout for SSH commands (seconds)
+SSH_TIMEOUT = 120  # Increased for cold VM osascript commands
+
 
 class Evaluator:
     def __init__(self, ssh_host: str, ssh_username: str, ssh_pkey: str):
@@ -11,8 +14,10 @@ class Evaluator:
         command = command.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$')
         ssh_command = f'ssh -o StrictHostKeyChecking=no -i "{self.ssh_pkey}" {self.ssh_username}@{self.ssh_host} "{command}"'
         try:
-            output = subprocess.check_output(ssh_command, shell=True, stderr=subprocess.STDOUT).decode().strip()
+            output = subprocess.check_output(ssh_command, shell=True, stderr=subprocess.STDOUT, timeout=SSH_TIMEOUT).decode().strip()
             return True, output
+        except subprocess.TimeoutExpired:
+            return False, f"SSH command timed out after {SSH_TIMEOUT}s"
         except Exception as e: # subprocess.CalledProcessError
             return False, e
 

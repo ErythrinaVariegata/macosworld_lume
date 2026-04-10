@@ -7,8 +7,8 @@ import os
 import signal
 import subprocess
 
-SSH_TIMEOUT = "30"          # lume ssh -t value (seconds)
-SUBPROCESS_TIMEOUT = 45     # subprocess.run hard kill (seconds)
+SSH_TIMEOUT = "90"          # lume ssh -t value (seconds) - increased for cold VM osascript cold-start
+SUBPROCESS_TIMEOUT = 120    # subprocess.run hard kill (seconds) - increased for cold VM osascript commands
 
 
 class LumeEvaluator:
