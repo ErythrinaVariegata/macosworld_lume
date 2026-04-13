@@ -48,7 +48,7 @@ This fork supports **two VM backends**:
 | | VMware Implementation | Lume Implementation |
 |---|---|---|
 | **Platform** | Ubuntu (Intel/AMD with AVX2) | macOS (Apple Silicon) |
-| **Virtualisation** | VMware Workstation | Apple Virtualization.framework via [Lume](https://github.com/tart-project/lume) |
+| **Virtualisation** | VMware Workstation | Apple Virtualization.framework via [Lume](https://cua.ai/docs/lume/guide/getting-started/introduction) |
 | **Env Reset** | Snapshot revert | APFS clone (copy-on-write) |
 | **Reset Time** | ~1 min | ~40 s (clone + boot + setup) |
 | **Display** | VMware VNC via SSH tunnel | Direct VNC (Retina 2x auto-scaled) |
@@ -65,7 +65,7 @@ This fork supports **two VM backends**:
 
  - Apple Silicon Mac (M1/M2/M3/M4 series)
  - macOS Sequoia 15.0+ (Tahoe)
- - [Lume CLI](https://github.com/tart-project/lume) v0.3.9+
+ - [Lume CLI](https://cua.ai/docs/lume/guide/getting-started/installation) v0.3.9+
  - 32 GB of RAM recommended
  - 200 GB of free disk space
  - A prepared golden VM (see [Step 2-L](#step-2-l-local-environment-configuration----lume))
@@ -199,7 +199,7 @@ Please follow the instructions [here](./instructions/configure_vmware_env.md) to
 
 ```bash
 # Install Lume CLI (v0.3.9+)
-brew install tart-project/tap/lume
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
 
 # Verify installation
 lume --version
@@ -210,20 +210,20 @@ lume --version
 Create a macOS VM that will serve as the template for all benchmark tasks:
 
 ```bash
-# Pull or create a macOS Sequoia VM
-lume pull macos-tahoe-cua_fixed
+# Pull or create a macOS Tahoe VM, Sequoia VM still in process
+lume pull macos-tahoe-cua:macosworld-en --registry ghcr.io --organization erythrinavariegata
 # Or create from an IPSW:
-# lume create macos-tahoe-cua_fixed --os macos --ipsw /path/to/UniversalMac_15.x.ipsw
+# lume create macos-tahoe-cua_macosworld-en --os macos --ipsw /path/to/UniversalMac_15.x.ipsw
 ```
 
 Configure the golden VM:
 
-1. Start the VM: `lume run macos-tahoe-cua_fixed`
+1. Start the VM: `lume run macos-tahoe-cua_macosworld-en`
 2. Complete macOS initial setup (username: `lume`, password: `lume`)
 3. Enable SSH: System Settings > General > Sharing > Remote Login
 4. Install any required apps for the benchmark tasks
 5. Import test data (contacts, reminders, notes, etc.) as needed by the tasks
-6. Stop the VM: `lume stop macos-tahoe-cua_fixed`
+6. Stop the VM: `lume stop macos-tahoe-cua_macosworld-en`
 
 #### 2-L.3. Grant TCC Permissions (Critical)
 
@@ -231,13 +231,13 @@ macOS requires explicit TCC (Transparency, Consent, and Control) permissions for
 
 ```bash
 # Start the golden VM
-lume run macos-tahoe-cua_fixed --no-display &
+lume run macos-tahoe-cua_macosworld-en --no-display &
 
 # Wait for boot (~20s), then run the preparation script
-./scripts/prepare_golden_vm.sh macos-tahoe-cua_fixed
+./scripts/prepare_golden_vm.sh macos-tahoe-cua_macosworld-en
 
 # Stop the golden VM to save the permissions
-lume stop macos-tahoe-cua_fixed
+lume stop macos-tahoe-cua_macosworld-en
 ```
 
 The script triggers osascript commands that produce TCC permission dialogs. For each dialog, connect to the VM via VNC (Screen Sharing) and click **"Allow"**. Alternatively, use the keyboard shortcut **Tab + Space** to approve.
@@ -252,7 +252,7 @@ Edit `constants.py` to map snapshot names to your golden VM:
 
 ```python
 lume_snapshot_lookup = {
-    'snapshot_used_en': 'macos-tahoe-cua_fixed',
+    'snapshot_used_en': 'macos-tahoe-cua_macosworld-en',
     # Add other language VMs as needed:
     # 'snapshot_used_zh': 'golden_used_zh',
 }
@@ -282,7 +282,7 @@ python run.py \
     --gui_agent_name 🧩gpt-4o-2024-08-06 \
     --paths_to_eval_tasks 🧩./tasks/sys_apps ./tasks/sys_and_interface ./tasks/productivity ./tasks/media ./tasks/file_management ./tasks/multi_apps \
     --languages 🧩task_en_env_en task_zh_env_zh task_ar_env_ar task_ja_env_ja task_ru_env_ru \
-    --base_save_dir ./results/gpt_4o \
+    --base_save_dir 🧩./results/gpt_4o \
     --max-steps 15 \
     --snapshot_recovery_timeout_seconds 120 \
     --task_step_timeout 120
@@ -301,15 +301,16 @@ export MODEL_API_KEY=🧩'your-api-key'
 
 # Run the benchmark with Lume
 python run.py \
-    --lume_golden_vm macos-tahoe-cua_fixed \
+    --lume_golden_vm 🧩macos-tahoe-cua_macosworld-en \
     --gui_agent_name 🧩tione \
     --paths_to_eval_tasks 🧩./tasks/sys_apps ./tasks/sys_and_interface ./tasks/productivity ./tasks/media ./tasks/file_management ./tasks/multi_apps \
     --languages 🧩task_en_env_en \
-    --base_save_dir ./results/tione_en \
+    --base_save_dir 🧩./results/tione_en \
     --max-steps 15 \
     --snapshot_recovery_timeout_seconds 120 \
     --task_step_timeout 120
 ```
+
 
 > **Note:** When using `--lume_golden_vm`, the following defaults are applied automatically: `guest_username=lume`, `guest_password=lume`. SSH keys (`--ssh_pkey`) are not needed.
 
@@ -358,7 +359,7 @@ python run.py \
     --gui_agent_name 🧩gpt-4o-2024-08-06 \
     --paths_to_eval_tasks 🧩./tasks/sys_apps ./tasks/safety \
     --languages 🧩task_en_env_en \
-    --base_save_dir ./results/gpt_4o \
+    --base_save_dir 🧩./results/gpt_4o \
     --max-steps 15 \
     --snapshot_recovery_timeout_seconds 120 \
     --task_step_timeout 120
@@ -376,7 +377,7 @@ python testbench.py \
     --gui_agent_name 🧩gpt-4o-2024-08-06 \
     --paths_to_eval_tasks 🧩./tasks/sys_apps \
     --languages 🧩task_en_env_en \
-    --base_save_dir ./results/gpt_4o \
+    --base_save_dir 🧩./results/gpt_4o \
     --max-steps 15 \
     --snapshot_recovery_timeout_seconds 120 \
     --task_step_timeout 120
@@ -385,11 +386,11 @@ python testbench.py \
 **Lume:**
 ```bash
 python testbench.py \
-    --lume_golden_vm macos-tahoe-cua_fixed \
+    --lume_golden_vm 🧩macos-tahoe-cua_macosworld-en \
     --gui_agent_name 🧩tione \
     --paths_to_eval_tasks 🧩./tasks/sys_apps \
     --languages 🧩task_en_env_en \
-    --base_save_dir ./results/tione_en \
+    --base_save_dir 🧩./results/tione_en \
     --max-steps 15 \
     --snapshot_recovery_timeout_seconds 120 \
     --task_step_timeout 120
