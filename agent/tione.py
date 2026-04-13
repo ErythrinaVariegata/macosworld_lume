@@ -187,9 +187,10 @@ class TiOne_GUI_Agent:
     def _preprocess_xml_output(self, agent_output: str) -> str:
         """Convert XML-style model output to plain text action format.
 
-        Handles two variants the model produces:
-          Variant 1 (inline):  <action_name> key_press command-c
-          Variant 2 (nested):  <action_name>type_text\\n<parameter=text>\\nhello\\n</parameter>\\n</action_name>
+        Handles multiple XML variants the model produces:
+          - ``<action_name>key_press command-c</action_name>``  (inline)
+          - ``<action_name>\\nkey_press\\n</action_name>\\n<parameter=key>\\nenter\\n</parameter>``  (nested)
+          - ``<action>key_press</action><parameter=key>enter</parameter>``  (short tag)
 
         Returns plain text lines like:
           key_press command-c
@@ -197,35 +198,62 @@ class TiOne_GUI_Agent:
         """
         import re
 
-        # If no XML tags at all, return as-is (already plain text)
-        if '<action_name>' not in agent_output:
+        # Detect which XML tag variant is used
+        if '<action_name>' in agent_output:
+            tag = 'action_name'
+        elif '<action>' in agent_output:
+            tag = 'action'
+        else:
+            # No XML tags at all, return as-is (already plain text)
             return agent_output
 
         result_lines = []
 
-        # Split by <action_name> blocks
-        blocks = re.split(r'<action_name>\s*', agent_output)
+        # Split by action tag blocks
+        blocks = re.split(rf'<{tag}>\s*', agent_output)
         for block in blocks:
             block = block.strip()
             if not block:
                 continue
 
-            # Remove closing tags
-            block = re.sub(r'</action_name>', '', block)
+            # Remove closing tags (both variants)
+            block = re.sub(rf'</{tag}>', '', block)
             block = re.sub(r'</action_code>', '', block)
 
-            # Check for nested parameter format: <parameter=key>\nvalue\n</parameter>
-            param_match = re.search(r'<parameter[=_](\w+)>\s*(.*?)\s*</parameter>', block, re.DOTALL)
-            if param_match:
+            # Collect ALL parameters in this block
+            params = re.findall(r'<parameter[=_](\w+)>\s*(.*?)\s*</parameter>', block, re.DOTALL)
+
+            if params:
+                # Extract the action command (text before the first '<')
                 action_cmd = block[:block.index('<')].strip()
-                param_value = param_match.group(2).strip()
-                if action_cmd and param_value:
-                    result_lines.append(f"{action_cmd} {param_value}")
-                elif action_cmd:
-                    result_lines.append(action_cmd)
+
+                if action_cmd in ('move_to', 'left_click', 'drag_to') and len(params) >= 2:
+                    # Coordinate-based action: combine x and y
+                    param_dict = {k: v.strip() for k, v in params}
+                    x = param_dict.get('x', '0')
+                    y = param_dict.get('y', '0')
+                    # If the action is left_click with coordinates, convert to move_to + left_click
+                    if action_cmd == 'left_click':
+                        result_lines.append(f"move_to {x} {y}")
+                        result_lines.append("left_click")
+                    else:
+                        result_lines.append(f"{action_cmd} {x} {y}")
+                elif len(params) == 1:
+                    # Single parameter action (key_press, type_text, wait, etc.)
+                    param_value = params[0][1].strip()
+                    if action_cmd and param_value:
+                        result_lines.append(f"{action_cmd} {param_value}")
+                    elif action_cmd:
+                        result_lines.append(action_cmd)
+                else:
+                    # Multiple non-coordinate params — just use the first
+                    param_value = params[0][1].strip()
+                    if action_cmd and param_value:
+                        result_lines.append(f"{action_cmd} {param_value}")
+                    elif action_cmd:
+                        result_lines.append(action_cmd)
             else:
-                # Inline format: just the action and params on one line
-                # Clean up any remaining XML-like tags
+                # No parameters — inline format or bare action
                 clean = re.sub(r'<[^>]*>', '', block).strip()
                 if clean:
                     result_lines.append(clean)
@@ -437,8 +465,12 @@ class TiOne_GUI_Agent:
             raw_response, messages = self(task = task, screenshots = self.screenshots)
 
             # Action
-            print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = 'Actuating...')
             parsed_actions = self.parse_agent_output(raw_response)
+            actions_summary = '; '.join(
+                a['action'] + (' ' + a.get('key', a.get('text', f"{a.get('x','')},{a.get('y','')}" if 'x' in a else '')) if len(a) > 1 else '')
+                for a in parsed_actions
+            ) or '(empty)'
+            print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = f'Actuating: {actions_summary}')
             status, _ = self.execute_actions(parsed_actions)
 
         # Save current_screenshot

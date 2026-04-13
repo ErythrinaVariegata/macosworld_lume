@@ -29,8 +29,8 @@ eval_init_command = """osascript -e 'tell application "System Events" to get val
 # Each golden VM is a pre-configured, stopped VM that serves as the template
 # for clone-based environment reset (replacing VMware snapshot revert).
 lume_snapshot_lookup = {
-    'snapshot_used_en': 'macos-tahoe-cua_fixed',
-    'snapshot_used_zh': 'golden_used_zh',
+    'snapshot_used_en': 'macos-tahoe-cua_macosworld-en',
+    'snapshot_used_zh': 'macos-tahoe-cua_macosworld-zh',
     'snapshot_used_ar': 'golden_used_ar',
     'snapshot_used_ja': 'golden_used_ja',
     'snapshot_used_ru': 'golden_used_ru',
