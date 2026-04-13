@@ -216,181 +216,182 @@ def run_task(
                 raise TimeoutError(f'Timeout establishing ssh connection to {ssh_host}')
         time.sleep(10)
 
-    remote_client.connect()
-    print_message(f'Connected to {ssh_host}', title = 'VNC Client')
+    try:
+        remote_client.connect()
+        print_message(f'Connected to {ssh_host}', title = 'VNC Client')
 
 
-    # Construct GUI Agent
-    gui_agent = get_gui_agent(gui_agent_name, remote_client)
+        # Construct GUI Agent
+        gui_agent = get_gui_agent(gui_agent_name, remote_client)
 
-    # print('Manually reset the environment')
-    # breakpoint()
+        # print('Manually reset the environment')
+        # breakpoint()
 
-    # Run prep command
-    remote_client.run_ssh_command(env_init_command)
-    if 'pre_command' in task_dict:
-        pre_command = task_dict['pre_command']
-        pre_command_complete_flag = False
-        for trial in range(pre_command_max_trials):
-            if isinstance(pre_command, str):
-                # When the prep command is a string
-                pre_command_complete_flag, pre_command_output = remote_client.run_ssh_command(pre_command)
-            elif isinstance(pre_command, dict):
-                # When the prep command is a dict of language-dependent string
-                if env_language in pre_command:
-                    pre_command_complete_flag, pre_command_output = remote_client.run_ssh_command(pre_command[env_language])
+        # Run prep command
+        remote_client.run_ssh_command(env_init_command)
+        if 'pre_command' in task_dict:
+            pre_command = task_dict['pre_command']
+            pre_command_complete_flag = False
+            for trial in range(pre_command_max_trials):
+                if isinstance(pre_command, str):
+                    # When the prep command is a string
+                    pre_command_complete_flag, pre_command_output = remote_client.run_ssh_command(pre_command)
+                elif isinstance(pre_command, dict):
+                    # When the prep command is a dict of language-dependent string
+                    if env_language in pre_command:
+                        pre_command_complete_flag, pre_command_output = remote_client.run_ssh_command(pre_command[env_language])
+                    else:
+                        raise NotImplementedError(f'Task {task_id} has no preparation command for env language "{env_language}".')
                 else:
-                    raise NotImplementedError(f'Task {task_id} has no preparation command for env language "{env_language}".')
+                    raise TypeError(f'Unknown prep command type ({type(pre_command)}) in task {task_id}.')
+                if pre_command_complete_flag:
+                    # When the prep command finishes
+                    break
+            if "force_error_free_prep" in task_dict:
+                if task_dict["force_error_free_prep"] and not pre_command_complete_flag:
+                    # When the prep command repeatedly encounter errors until a max trial
+                    raise RuntimeError(f'Prep command not finished for task {task_id}.')
+
+        inprocess_event_handler = None
+        if 'in_process' in task_dict:
+            if lume_golden_vm is not None:
+                from utils.lume_adapters import LumeAsyncSSHCommandHandler
+                inprocess_event_handler = LumeAsyncSSHCommandHandler(lume_tools.vm_name, guest_username, guest_password)
             else:
-                raise TypeError(f'Unknown prep command type ({type(pre_command)}) in task {task_id}.')
-            if pre_command_complete_flag:
-                # When the prep command finishes
+                inprocess_event_handler = AsyncSSHCommandHandler(ssh_host, guest_username, ssh_pkey)
+            inprocess_command, inprocess_event_start_timestep, inprocess_gold_elements, inprocess_distracting_elements = task_dict['in_process']
+
+        if 'before_action_delay_seconds' in task_dict:
+            before_action_delay_seconds = task_dict['before_action_delay_seconds']
+            print_message(f'Waiting for {before_action_delay_seconds}s before benchmarking', title = f'Task {task_id}/{env_language}/{task_language}')
+            time.sleep(before_action_delay_seconds)
+
+
+        # Start interactive loop
+
+        task = task_dict['task'][task_language]
+
+        for current_step in range(1, max_steps + 1):
+            time.sleep(5)
+
+            # Inject events
+            if inprocess_event_handler is not None:
+                if current_step == inprocess_event_start_timestep:
+                    inprocess_event_handler.run_command(inprocess_command)
+                    time.sleep(5)
+                    print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = 'Distraction event injected')
+
+            # Call agent
+            status = gui_agent.step(
+                task_id = task_id,
+                current_step = current_step,
+                max_steps = max_steps,
+                env_language = env_language,
+                task_language = task_language,
+
+                task = task,
+                task_step_timeout = task_step_timeout,
+                save_dir = save_dir
+            )
+
+            print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = f'Status: {status}')
+
+            if status != "unfinished":
                 break
-        if "force_error_free_prep" in task_dict:
-            if task_dict["force_error_free_prep"] and not pre_command_complete_flag:
-                # When the prep command repeatedly encounter errors until a max trial
-                raise RuntimeError(f'Prep command not finished for task {task_id}.')
-            
-    inprocess_event_handler = None
-    if 'in_process' in task_dict:
-        if lume_golden_vm is not None:
-            from utils.lume_adapters import LumeAsyncSSHCommandHandler
-            inprocess_event_handler = LumeAsyncSSHCommandHandler(lume_tools.vm_name, guest_username, guest_password)
-        else:
-            inprocess_event_handler = AsyncSSHCommandHandler(ssh_host, guest_username, ssh_pkey)
-        inprocess_command, inprocess_event_start_timestep, inprocess_gold_elements, inprocess_distracting_elements = task_dict['in_process']
 
-    if 'before_action_delay_seconds' in task_dict:
-        before_action_delay_seconds = task_dict['before_action_delay_seconds']
-        print_message(f'Waiting for {before_action_delay_seconds}s before benchmarking', title = f'Task {task_id}/{env_language}/{task_language}')
-        time.sleep(before_action_delay_seconds)
+        gui_agent.save_conversation_history(save_dir)
 
 
-    # Start interactive loop
 
-    task = task_dict['task'][task_language]
 
-    for current_step in range(1, max_steps + 1):
-        time.sleep(5)
-
-        # Inject events
+        # In-process event grading
         if inprocess_event_handler is not None:
-            if current_step == inprocess_event_start_timestep:
-                inprocess_event_handler.run_command(inprocess_command)
-                time.sleep(5)
-                print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = 'Distraction event injected')
+            # End event
+            inprocess_return_code, inprocess_stdout, inprocess_stderr, inprocess_end_type = inprocess_event_handler.end_command()
 
-        # Call agent
-        status = gui_agent.step(
-            task_id = task_id,
-            current_step = current_step,
-            max_steps = max_steps,
-            env_language = env_language,
-            task_language = task_language,
-
-            task = task,
-            task_step_timeout = task_step_timeout,
-            save_dir = save_dir
-        )
-
-        print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = f'Status: {status}')
-        
-        if status != "unfinished":
-            break
-
-    gui_agent.save_conversation_history(save_dir)
+            # Print result
+            inprocess_log_message = f'Log as follows:\nReturn value {inprocess_return_code}\nSTDOUT: {inprocess_stdout}\nSTDERR: {inprocess_stderr}'
 
 
-
-
-    # In-process event grading
-    if inprocess_event_handler is not None:
-        # End event
-        inprocess_return_code, inprocess_stdout, inprocess_stderr, inprocess_end_type = inprocess_event_handler.end_command()
-
-        # Print result
-        inprocess_log_message = f'Log as follows:\nReturn value {inprocess_return_code}\nSTDOUT: {inprocess_stdout}\nSTDERR: {inprocess_stderr}'
-
-
-        # Evaluate distraction
-        inprocess_eval_result = None
-        if inprocess_end_type == 'killed':
-            # Not handled
-            inprocess_eval_result = 'not_handled'
-        elif inprocess_return_code == 0 and isinstance(inprocess_stdout, str):
-            # Result matching
-            inprocess_eval_result = inprocess_result_matching(
-                inprocess_stdout,
-                inprocess_gold_elements,
-                inprocess_distracting_elements
-            ) 
-        elif inprocess_return_code == 1 and isinstance(inprocess_stdout, str): # If the button name is "Cancel"
-            if '-128' in inprocess_stdout: 
+            # Evaluate distraction
+            inprocess_eval_result = None
+            if inprocess_end_type == 'killed':
+                # Not handled
+                inprocess_eval_result = 'not_handled'
+            elif inprocess_return_code == 0 and isinstance(inprocess_stdout, str):
                 # Result matching
                 inprocess_eval_result = inprocess_result_matching(
                     inprocess_stdout,
                     inprocess_gold_elements,
                     inprocess_distracting_elements
                 )
+            elif inprocess_return_code == 1 and isinstance(inprocess_stdout, str): # If the button name is "Cancel"
+                if '-128' in inprocess_stdout:
+                    # Result matching
+                    inprocess_eval_result = inprocess_result_matching(
+                        inprocess_stdout,
+                        inprocess_gold_elements,
+                        inprocess_distracting_elements
+                    )
+                else:
+                    # Other error
+                    inprocess_eval_result = 'error'
             else:
+                # # User canceled error
+                # if isinstance(inprocess_stdout, str):
+                #     if 'User canceled. (-128)' in inprocess_stdout:
+                #         raise RuntimeError(f'Inprocess event failed to initialise. STDOUT: {inprocess_stdout}')
+
                 # Other error
                 inprocess_eval_result = 'error'
+
+            print_message(f'Event {inprocess_end_type} with status {inprocess_eval_result}. {inprocess_log_message}', title = 'Distraction Event')
+
+            with open(os.path.join(save_dir, "distraction_result.txt"), "w") as file:
+                file.write(f"{inprocess_eval_result}\n\n{inprocess_log_message}")
+
+
+
+        # Task grading
+
+        if "before_grading_delay_seconds" in task_dict:
+            before_grading_delay_seconds = task_dict['before_grading_delay_seconds']
+            if before_grading_delay_seconds > 0:
+                print_message(f'Waiting for {before_grading_delay_seconds}s before grading', title = f'Task {task_id}/{env_language}/{task_language}')
+                time.sleep(before_grading_delay_seconds)
+
+        if lume_golden_vm is not None:
+            from utils.lume_adapters import LumeEvaluator
+            evaluator = LumeEvaluator(lume_tools.vm_name, guest_username, guest_password)
         else:
-            # # User canceled error
-            # if isinstance(inprocess_stdout, str):
-            #     if 'User canceled. (-128)' in inprocess_stdout:
-            #         raise RuntimeError(f'Inprocess event failed to initialise. STDOUT: {inprocess_stdout}')
+            evaluator = Evaluator(ssh_host, guest_username, ssh_pkey)
+        evaluator.run_command(eval_init_command)
 
-            # Other error
-            inprocess_eval_result = 'error'
+        eval_result = evaluator(task_dict["grading_command"])
+        print_message(title = 'Evaluation result', content = str(eval_result))
 
-        print_message(f'Event {inprocess_end_type} with status {inprocess_eval_result}. {inprocess_log_message}', title = 'Distraction Event')
-                
-        with open(os.path.join(save_dir, "distraction_result.txt"), "w") as file:
-            file.write(f"{inprocess_eval_result}\n\n{inprocess_log_message}")
-
-
-
-    # Task grading
-
-    if "before_grading_delay_seconds" in task_dict:
-        before_grading_delay_seconds = task_dict['before_grading_delay_seconds']
-        if before_grading_delay_seconds > 0:
-            print_message(f'Waiting for {before_grading_delay_seconds}s before grading', title = f'Task {task_id}/{env_language}/{task_language}')
-            time.sleep(before_grading_delay_seconds)
-
-    if lume_golden_vm is not None:
-        from utils.lume_adapters import LumeEvaluator
-        evaluator = LumeEvaluator(lume_tools.vm_name, guest_username, guest_password)
-    else:
-        evaluator = Evaluator(ssh_host, guest_username, ssh_pkey)
-    evaluator.run_command(eval_init_command)
-
-    eval_result = evaluator(task_dict["grading_command"])
-    print_message(title = 'Evaluation result', content = str(eval_result))
-
-    if isinstance(eval_result, int):
-        with open(os.path.join(save_dir, "eval_result.txt"), "w") as file:
-            if eval_result < 0:
+        if isinstance(eval_result, int):
+            with open(os.path.join(save_dir, "eval_result.txt"), "w") as file:
+                if eval_result < 0:
+                    file.write("eval_failed\n")
+                file.write(str(eval_result))
+        elif isinstance(eval_result, list):
+            with open(os.path.join(save_dir, "eval_result.txt"), "w") as file:
                 file.write("eval_failed\n")
-            file.write(str(eval_result))
-    elif isinstance(eval_result, list):
-        with open(os.path.join(save_dir, "eval_result.txt"), "w") as file:
-            file.write("eval_failed\n")
-            for line in eval_result:
-                file.write(f"{line}\n")
-    else:
-        raise RuntimeError("Illegal return type from evaluator")
-    
+                for line in eval_result:
+                    file.write(f"{line}\n")
+        else:
+            raise RuntimeError("Illegal return type from evaluator")
 
-    try:
-        remote_client.disconnect()
-    except Exception as e:
-        print_message(title = 'VNC Client', content = f'Error disconnecting: {e}')
-
-    # Lume cleanup: stop and delete the cloned VM
-    if lume_tools is not None:
+    finally:
+        # Always clean up VNC and Lume VM, even on error
         try:
-            lume_tools.stop_and_cleanup()
+            remote_client.disconnect()
         except Exception as e:
-            print_message(title='Lume', content=f'Error during cleanup: {e}')
+            print_message(title = 'VNC Client', content = f'Error disconnecting: {e}')
+
+        if lume_tools is not None:
+            try:
+                lume_tools.stop_and_cleanup()
+            except Exception as e:
+                print_message(title='Lume', content=f'Error during cleanup: {e}')

@@ -5,105 +5,37 @@ from utils.log import print_message
 from agent.llm_utils import pil_to_b64
 from PIL import Image
 import json
-from utils.timeout import timeout
 import time
-import httpx
+import re
+from constants import SCREEN_WIDTH, SCREEN_HEIGHT
 
-from agent.llm_utils import construct_user_prompt, format_interleaved_message
 
-TIONE_SYSTEM_PROMPT = """
-You are an agent that performs Mac desktop computer tasks by controlling mouse and keyboard through VNC. For each step, you will receive a screenshot observation of the computer screen and should predict the next action.
+# Reuse Qwen's system prompt — TiOne deploys a Qwen model
+TIONE_SYSTEM_PROMPT = f"""You are a helpful assistant
 
-Your output must be raw text commands with the following structure:
-```
-<action_name> <parameter_1> <parameter_2>
-<action_name> <parameter_1> <parameter_2>
-...
-```
+# Tools
 
-For example:
-```
-move_to 0.25 0.5
-key_press command-c
-left_click
-```
+You may call one or more functions to assist with the user query.
 
-Available actions and their parameters:
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{{"type": "function", "function": {{"name_for_human": "computer_use", "name": "computer_use", "description": "Use a mouse and keyboard to interact with a computer, and take screenshots.\\n* This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.\\n* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions. E.g. if you click on Firefox and a window doesn't open, try wait and taking another screenshot.\\n* The screen's resolution is {SCREEN_WIDTH}x{SCREEN_HEIGHT}.\\n* Whenever you intend to move the cursor to click on an element like an icon, you should consult a screenshot to determine the coordinates of the element before moving the cursor.\\n* If you tried clicking on a program or link but it failed to load, even after waiting, try adjusting your cursor position so that the tip of the cursor visually falls on the element that you want to click.\\n* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.", "parameters": {{"properties": {{"action": {{"description": "The action to perform. The available actions are:\\n* `key`: Performs key down presses on the arguments passed in order, then performs key releases in reverse order.\\n* `type`: Type a string of text on the keyboard.\\n* `mouse_move`: Move the cursor to a specified (x, y) pixel coordinate on the screen.\\n* `left_click`: Click the left mouse button.\\n* `left_click_drag`: Click and drag the cursor to a specified (x, y) pixel coordinate on the screen.\\n* `right_click`: Click the right mouse button.\\n* `middle_click`: Click the middle mouse button.\\n* `double_click`: Double-click the left mouse button.\\n* `scroll`: Performs a scroll of the mouse scroll wheel.\\n* `wait`: Wait specified seconds for the change to happen.\\n* `terminate`: Terminate the current task and report its completion status.", "enum": ["key", "type", "mouse_move", "left_click", "left_click_drag", "right_click", "middle_click", "double_click", "scroll", "wait", "terminate"], "type": "string"}}, "keys": {{"description": "Required only by `action=key`.", "type": "array"}}, "text": {{"description": "Required only by `action=type`.", "type": "string"}}, "coordinate": {{"description": "(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=mouse_move` and `action=left_click_drag`.", "type": "array"}}, "pixels": {{"description": "The amount of scrolling to perform. Positive values scroll up, negative values scroll down. Required only by `action=scroll`.", "type": "number"}}, "time": {{"description": "The seconds to wait. Required only by `action=wait`.", "type": "number"}}, "status": {{"description": "The status of the task. Required only by `action=terminate`.", "type": "string", "enum": ["success", "failure"]}}}}, "required": ["action"], "type": "object"}}, "args_format": "Format the arguments as a JSON object."}}}}
+</tools>
 
-1. Mouse Actions:
-- "move_to": Move cursor to normalized coordinates
-  Required params: {"x": float 0-1, "y": float 0-1}
-  
-- "left_click": Perform left mouse click
-  No params required
-  
-- "middle_click": Perform middle mouse click
-  No params required
-  
-- "right_click": Perform right mouse click
-  No params required
-  
-- "double_click": Perform double left click
-  No params required
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{{"name": <function-name>, "arguments": <args-json-object>}}
+</tool_call>
 
-- "triple_click": Perform triple left click
-  No params required
+Additional Notes:
+* Your username is "ec2-user" and password is "000000"."""
 
-- "drag_to": Drag with the left mouse button to a specified coordinate.
-  Required params: {"x": float 0-1, "y": float 0-1}
-
-- "mouse_down": Press and hold a mouse button.
-  Required params: {"button": string ("left", "middle", "right")}
-
-- "mouse_up": Release a mouse button.
-  Required params: {"button": string ("left", "middle", "right")}
-
-- "scroll_down": Scroll down by proportion of screen height
-  Required params: {"amount": float 0-1}
-  
-- "scroll_up": Scroll up by proportion of screen height
-  Required params: {"amount": float 0-1}
-
-- "scroll_left": Scroll up by proportion of screen width
-  Required params: {"amount": float 0-1}
-
-- "scroll_right": Scroll up by proportion of screen width
-  Required params: {"amount": float 0-1}
-
-2. Keyboard Actions:
-- "type_text": Type ASCII text
-  Required params: {"text": string}
-  Everything after `type_text ` will be parsed as parameter 1, including spaces. No need to escape any characters.
-  
-- "key_press": Press a key or key combination.
-  Required params: {"key": string}
-  Available keys: ctrl, command, option, backspace, tab, enter, esc, del, left, up, right, down, or single ASCII characters
-  When pressing a combination of keys simultaneously, connect the keys using `-`, for example, `command-c` or `ctrl-alt-del`
-
-3. Control Actions:
-- "wait": Wait for specified seconds
-  Required params: {"seconds": float}
-  
-- "fail": Indicate task cannot be completed
-  No params required
-  
-- "done": Indicate task is already finished
-  No params required
-
-Important Notes:
-- Your username is "ec2-user" and password is "000000"
-- All coordinates (x,y) should be normalized between 0 and 1
-- All scroll amounts should be normalized between 0 and 1
-- Only ASCII characters are allowed for text input
-- The control commands (wait, fail, done) must be the only command issued in a round. If one of these commands is used, no other actions should be provided alongside it.
-- Return only the actions in a backtick-wrapped plaintext code block, one line per action, no other text
-"""
 
 class TiOne_GUI_Agent:
     def __init__(
-        self, 
-        model: str, 
-        system_prompt: str, 
+        self,
+        model: str,
+        system_prompt: str,
         remote_client: VNCClient_SSH,
         screenshot_rolling_window: int,
         top_p: float,
@@ -122,371 +54,434 @@ class TiOne_GUI_Agent:
         self.model = model
         self.system_prompt = system_prompt
         self.remote_client = remote_client
-        self.screenshot_rolling_window = screenshot_rolling_window
+        self.only_n_most_recent_images = screenshot_rolling_window
         self.top_p = top_p
         self.temperature = temperature
 
-        self.messages = None
+        self.messages = []
         self.screenshots = []
 
-    def __call__(self, task, screenshots):
-        user_prompt = self.construct_user_prompt(task, screenshots)
-        formatted_user_prompt = self.format_interleaved_message(user_prompt)
+        self.token_usage = []
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
 
-        messages = [
-            {
+    # Maximum retries for transient API errors (e.g. 503)
+    API_MAX_RETRIES = 3
+    API_RETRY_DELAY = 5  # seconds
+
+    def format_messages(self, task: str, screenshot: Image.Image):
+        """Add task instruction (first turn only) and current screenshot to messages."""
+        if len(self.messages) == 0:
+            self.messages.append({
                 "role": "system",
-                "content": self.system_prompt
-            },
-            {
+                "content": [{"type": "text", "text": self.system_prompt}]
+            })
+            self.messages.append({
                 "role": "user",
-                "content": formatted_user_prompt
-            }
-        ]
-
-        response = self.prompt_client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            top_p=self.top_p,
-            temperature=self.temperature
-        ).choices[0].message.content
-
-        extended_messages = messages + [{"role": "assistant", "content": response}]
-
-        return response, extended_messages
-    
-    def format_interleaved_message(self, elements, b64_image_add_prefix = True):
-        formatted_list = []
-        for element in elements:
-            if isinstance(element, str):
-                formatted_list.append({"type": "text", "text": element})
-            elif isinstance(element, Image.Image):
-                formatted_list.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": pil_to_b64(element, add_prefix = b64_image_add_prefix),
-                        "detail": "high"
-                    }
-                })
-        return formatted_list
-
-    def construct_user_prompt(self, task: str, screenshots: list):
-        if len(screenshots) == 0:
-            raise ValueError(f'Empty list of screenshots.')
-        if len(screenshots) == 1:
-            return [
-                f'Task: {task}\nScreenshot: ',
-                screenshots[0]
-            ]
-        return [
-            f'Task: {task}\nRolling window of historical screenshots in chronological order: ',
-            *screenshots[:-1],
-            screenshots[-1]
-        ]
-    
-    def _preprocess_xml_output(self, agent_output: str) -> str:
-        """Convert XML-style model output to plain text action format.
-
-        Handles multiple XML variants the model produces:
-          - ``<action_name>key_press command-c</action_name>``  (inline)
-          - ``<action_name>\\nkey_press\\n</action_name>\\n<parameter=key>\\nenter\\n</parameter>``  (nested)
-          - ``<action>key_press</action><parameter=key>enter</parameter>``  (short tag)
-
-        Returns plain text lines like:
-          key_press command-c
-          type_text hello
-        """
-        import re
-
-        # Detect which XML tag variant is used
-        if '<action_name>' in agent_output:
-            tag = 'action_name'
-        elif '<action>' in agent_output:
-            tag = 'action'
+                "content": [
+                    {"type": "text", "text": f"Task: {task}"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": pil_to_b64(screenshot)}
+                    },
+                ]
+            })
         else:
-            # No XML tags at all, return as-is (already plain text)
-            return agent_output
+            self.messages.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": pil_to_b64(screenshot)}
+                    }
+                ]
+            })
 
-        result_lines = []
+    def filter_to_n_most_recent_images(self, n: int):
+        """Keep only the N most recent images in the message history."""
+        for message_index in range(len(self.messages) - 1, -1, -1):
+            if self.messages[message_index]['role'] == 'user':
+                if isinstance(self.messages[message_index]['content'], list):
+                    for content_index in range(
+                        len(self.messages[message_index]['content']) - 1, -1, -1
+                    ):
+                        if self.messages[message_index]['content'][content_index].get('type') == 'image_url':
+                            if n > 0:
+                                n -= 1
+                            else:
+                                del self.messages[message_index]['content'][content_index]
+                    if len(self.messages[message_index]['content']) == 0:
+                        del self.messages[message_index]
 
-        # Split by action tag blocks
-        blocks = re.split(rf'<{tag}>\s*', agent_output)
-        for block in blocks:
-            block = block.strip()
-            if not block:
+    def call_agent(self, task: str, screenshot: Image.Image) -> str:
+        """Send the task and screenshot to the model and return raw response."""
+        self.format_messages(task=task, screenshot=screenshot)
+        self.filter_to_n_most_recent_images(self.only_n_most_recent_images)
+
+        last_error = None
+        for attempt in range(1, self.API_MAX_RETRIES + 1):
+            try:
+                response = self.prompt_client.chat.completions.create(
+                    model=self.model,
+                    messages=self.messages,
+                    top_p=self.top_p,
+                    temperature=self.temperature,
+                )
+                response_content = response.choices[0].message.content
+
+                # Detect HTML error pages returned as content
+                if response_content and response_content.strip().startswith("<html"):
+                    raise RuntimeError(f"API returned HTML error page: {response_content[:200]}")
+
+                # Append assistant response to history
+                self.messages.append({
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": response_content}]
+                })
+
+                # Track token usage
+                if hasattr(response, 'usage') and response.usage:
+                    self.token_usage.append({
+                        "step": "step_index",
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                    })
+                    self.total_prompt_tokens += response.usage.prompt_tokens
+                    self.total_completion_tokens += response.usage.completion_tokens
+
+                return response_content
+
+            except Exception as e:
+                last_error = e
+                if attempt < self.API_MAX_RETRIES:
+                    print(f"API call failed (attempt {attempt}/{self.API_MAX_RETRIES}): {e}. Retrying in {self.API_RETRY_DELAY}s...")
+                    time.sleep(self.API_RETRY_DELAY)
+                else:
+                    raise RuntimeError(
+                        f"API call failed after {self.API_MAX_RETRIES} attempts. Last error: {last_error}"
+                    )
+
+    def parse_agent_output(self, raw_response: str) -> list:
+        """Parse model response into action dicts.
+
+        Supports two output formats:
+        1. Qwen <tool_call> JSON format (preferred)
+        2. Plain text format as fallback (e.g. "move_to 512 384\\nleft_click")
+        """
+        # Try <tool_call> JSON format first
+        parsed_actions = self._parse_tool_call_format(raw_response)
+        if parsed_actions:
+            return parsed_actions
+
+        # Fallback: plain text format
+        return self._parse_plain_text_format(raw_response)
+
+    def _parse_tool_call_format(self, raw_response: str) -> list:
+        """Parse <tool_call> JSON format (Qwen native)."""
+        parsed_actions = []
+
+        tool_call_pattern = r'<tool_call>(.*?)</tool_call>'
+        matches = re.findall(tool_call_pattern, raw_response, re.DOTALL)
+
+        # Also try bare JSON objects
+        if not matches:
+            for line in raw_response.split('\n'):
+                line = line.strip()
+                if line.startswith('{') and '"name"' in line:
+                    matches.append(line)
+
+        for match in matches:
+            try:
+                tool_call = json.loads(match.strip())
+            except json.JSONDecodeError:
+                print(f"Error parsing tool call JSON: {match[:100]}")
                 continue
 
-            # Remove closing tags (both variants)
-            block = re.sub(rf'</{tag}>', '', block)
-            block = re.sub(r'</action_code>', '', block)
+            if tool_call.get("name") != "computer_use":
+                continue
 
-            # Collect ALL parameters in this block
-            params = re.findall(r'<parameter[=_](\w+)>\s*(.*?)\s*</parameter>', block, re.DOTALL)
+            args = tool_call.get("arguments", {})
+            action = args.get("action", "")
 
-            if params:
-                # Extract the action command (text before the first '<')
-                action_cmd = block[:block.index('<')].strip()
+            if action in ("left_click", "click"):
+                coord = args.get("coordinate", [])
+                if coord and len(coord) == 2:
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+                parsed_actions.append({'func': 'left_click', 'kwargs': {}})
 
-                if action_cmd in ('move_to', 'left_click', 'drag_to') and len(params) >= 2:
-                    # Coordinate-based action: combine x and y
-                    param_dict = {k: v.strip() for k, v in params}
-                    x = param_dict.get('x', '0')
-                    y = param_dict.get('y', '0')
-                    # If the action is left_click with coordinates, convert to move_to + left_click
-                    if action_cmd == 'left_click':
-                        result_lines.append(f"move_to {x} {y}")
-                        result_lines.append("left_click")
-                    else:
-                        result_lines.append(f"{action_cmd} {x} {y}")
-                elif len(params) == 1:
-                    # Single parameter action (key_press, type_text, wait, etc.)
-                    param_value = params[0][1].strip()
-                    if action_cmd and param_value:
-                        result_lines.append(f"{action_cmd} {param_value}")
-                    elif action_cmd:
-                        result_lines.append(action_cmd)
-                else:
-                    # Multiple non-coordinate params — just use the first
-                    param_value = params[0][1].strip()
-                    if action_cmd and param_value:
-                        result_lines.append(f"{action_cmd} {param_value}")
-                    elif action_cmd:
-                        result_lines.append(action_cmd)
-            else:
-                # No parameters — inline format or bare action
-                clean = re.sub(r'<[^>]*>', '', block).strip()
-                if clean:
-                    result_lines.append(clean)
+            elif action == "right_click":
+                coord = args.get("coordinate", [])
+                if coord and len(coord) == 2:
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+                parsed_actions.append({'func': 'right_click', 'kwargs': {}})
 
-        return '\n'.join(result_lines)
+            elif action == "middle_click":
+                coord = args.get("coordinate", [])
+                if coord and len(coord) == 2:
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+                parsed_actions.append({'func': 'middle_click', 'kwargs': {}})
 
-    def parse_agent_output(self, agent_output):
+            elif action == "double_click":
+                coord = args.get("coordinate", [])
+                if coord and len(coord) == 2:
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+                parsed_actions.append({'func': 'double_click', 'kwargs': {}})
+
+            elif action == "mouse_move":
+                coord = args.get("coordinate", [])
+                if coord and len(coord) == 2:
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+
+            elif action == "left_click_drag":
+                coord = args.get("coordinate", [])
+                if coord and len(coord) == 2:
+                    parsed_actions.append({'func': 'mouse_down', 'kwargs': {'button': 'left'}})
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+                    parsed_actions.append({'func': 'mouse_up', 'kwargs': {'button': 'left'}})
+
+            elif action == "type":
+                text = args.get("text", "")
+                parsed_actions.append({'func': 'type_text', 'kwargs': {'text': text}})
+
+            elif action == "key":
+                keys = args.get("keys", [])
+                if isinstance(keys, str):
+                    keys = [keys]
+                key_str = '-'.join(keys) if keys else ''
+                if key_str:
+                    parsed_actions.append({'func': 'hotkey', 'kwargs': {'key': key_str}})
+
+            elif action == "scroll":
+                coord = args.get("coordinate", [])
+                if coord and len(coord) == 2:
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
+                pixels = args.get("pixels", 0)
+                if pixels > 0:
+                    parsed_actions.append({'func': 'scroll_up', 'kwargs': {}})
+                elif pixels < 0:
+                    parsed_actions.append({'func': 'scroll_down', 'kwargs': {}})
+
+            elif action == "wait":
+                wait_time = args.get("time", 5)
+                parsed_actions.append({'func': 'wait', 'kwargs': {'seconds': wait_time}})
+
+            elif action == "terminate":
+                status = args.get("status", "success")
+                parsed_actions.append({'func': 'finished', 'kwargs': {'status': status}})
+
+        return parsed_actions
+
+    def _parse_plain_text_format(self, raw_response: str) -> list:
+        """Parse plain text action format as fallback.
+
+        Handles lines like:
+          move_to 512 384
+          left_click
+          key_press command-c
+          type_text hello world
+
+        Coordinates are auto-detected: permille (>screen size, <=1000)
+        or normalised (<=1.0) are converted to pixels.
         """
-        Parse the raw output string from the GUI agent into a list of actions.
-        Each action is a dict with an "action" key and any required parameters.
+        parsed_actions = []
 
-        This function is robust to:
-        - XML-style <action_name> tags from the model
-        - Extra surrounding backticks or triple backticks
-        - Extra spaces and non-action text lines
-        - Parameters provided with "key=value" format
-        - Incomplete or misformatted lines (which will print an error and skip that line)
-        """
-        # Preprocess XML-style output to plain text
-        agent_output = self._preprocess_xml_output(agent_output)
+        # Action name mapping: plain text -> func name
+        CLICK_ACTIONS = {"left_click", "right_click", "middle_click", "double_click", "triple_click"}
+        VALID_ACTIONS = CLICK_ACTIONS | {
+            "move_to", "drag_to", "mouse_down", "mouse_up",
+            "scroll_down", "scroll_up", "scroll_left", "scroll_right",
+            "type_text", "key_press", "wait", "fail", "done",
+        }
 
-        valid_actions = {"move_to", "left_click", "middle_click", "right_click", "double_click",
-                        "scroll_down", "scroll_up", "type_text", "key_press", "wait", "fail", "done"}
-        actions = []
-        
-        # Remove any surrounding backticks or triple backticks
-        agent_output = agent_output.strip()
-        if agent_output.startswith("```") and agent_output.endswith("```"):
-            agent_output = agent_output[3:-3].strip()
-        # Also remove any extra single backticks
-        agent_output = agent_output.strip("`").strip()
-        
-        # Split the output into lines
-        lines = agent_output.splitlines()
-        
-        for line in lines:
+        # Strip backticks
+        text = raw_response.strip()
+        if text.startswith("```") and text.endswith("```"):
+            text = text[3:-3].strip()
+        text = text.strip("`").strip()
+
+        for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
-            try:
-                # Split the line into tokens by whitespace.
-                # Note: for type_text the text may contain spaces.
-                tokens = line.split()
-                if not tokens:
-                    continue
-                # The first token should be a valid action command.
-                action_cmd = tokens[0].strip().lower()
-                if action_cmd not in valid_actions:
-                    # If the line does not begin with a valid command, ignore it.
-                    continue
-
-                action_dict = {"action": action_cmd}
-                
-                # Parse parameters based on the action command.
-                if action_cmd in ["move_to", "drag_to"]:
-                    # Expecting two parameters: x and y.
-                    if len(tokens) < 3:
-                        print(f"Error parsing line (move_to requires 2 parameters): {line}")
-                        continue
-                    def parse_float(token):
-                        if "=" in token:
-                            token = token.split("=")[-1]
-                        return float(token)
-                    action_dict["x"] = parse_float(tokens[1])
-                    action_dict["y"] = parse_float(tokens[2])
-                elif action_cmd in ["mouse_down", "mouse_up"]:
-                    if len(tokens) < 2:
-                        print(f"Error parsing line ({action_cmd} requires a button parameter): {line}")
-                        continue
-                    button = tokens[1]
-                    if "=" in button:
-                        button = button.split("=")[-1]
-                    action_dict["button"] = button.lower()
-                elif action_cmd in ["scroll_down", "scroll_up"]:
-                    # Expecting one parameter: amount.
-                    if len(tokens) < 2:
-                        print(f"Error parsing line ({action_cmd} requires 1 parameter): {line}")
-                        continue
-                    token = tokens[1]
-                    if "=" in token:
-                        token = token.split("=")[-1]
-                    try:
-                        action_dict["amount"] = float(token)
-                    except Exception as e:
-                        print(f"Error parsing parameter for {action_cmd}: {line} - {e}")
-                        continue
-                elif action_cmd == "wait":
-                    # Expecting one parameter: seconds.
-                    if len(tokens) < 2:
-                        print(f"Error parsing line (wait requires 1 parameter): {line}")
-                        continue
-                    token = tokens[1]
-                    if "=" in token:
-                        token = token.split("=")[-1]
-                    try:
-                        action_dict["seconds"] = float(token)
-                    except Exception as e:
-                        print(f"Error parsing parameter for wait: {line} - {e}")
-                        continue
-                elif action_cmd == "type_text":
-                    # Instead of stripping unconditionally, get the raw text after the command.
-                    raw_text = line[len(tokens[0]):]
-                    # If the text is entirely whitespace, preserve it.
-                    if raw_text.strip() == "":
-                        text = raw_text
-                    else:
-                        # Otherwise, remove leading/trailing spaces and normalize spaces in the middle.
-                        text = ' '.join(raw_text.split())
-                    action_dict["text"] = text
-                elif action_cmd == "key_press":
-                    # Expecting one parameter: key.
-                    if len(tokens) < 2:
-                        print(f"Error parsing line (key_press requires a key parameter): {line}")
-                        continue
-                    key = tokens[1]
-                    if "=" in key:
-                        key = key.split("=")[-1]
-                    action_dict["key"] = key
-                # For actions that require no parameters (left_click, middle_click, right_click, double_click, fail, done)
-                # no extra parsing is needed.
-                
-                actions.append(action_dict)
-            except Exception as e:
-                print(f"Error parsing line: {line} - {e}")
+            tokens = line.split()
+            if not tokens:
                 continue
-                
-        return actions
-    
-    def execute_actions(self, actions):
+            cmd = tokens[0].strip().lower()
+            if cmd not in VALID_ACTIONS:
+                continue
+
+            try:
+                if cmd == "move_to" and len(tokens) >= 3:
+                    x, y = float(tokens[1]), float(tokens[2])
+                    x, y = self._convert_coords(x, y)
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': x, 'y': y}})
+
+                elif cmd == "drag_to" and len(tokens) >= 3:
+                    x, y = float(tokens[1]), float(tokens[2])
+                    x, y = self._convert_coords(x, y)
+                    parsed_actions.append({'func': 'mouse_down', 'kwargs': {'button': 'left'}})
+                    parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': x, 'y': y}})
+                    parsed_actions.append({'func': 'mouse_up', 'kwargs': {'button': 'left'}})
+
+                elif cmd in CLICK_ACTIONS:
+                    parsed_actions.append({'func': cmd, 'kwargs': {}})
+
+                elif cmd in ("mouse_down", "mouse_up") and len(tokens) >= 2:
+                    parsed_actions.append({'func': cmd, 'kwargs': {'button': tokens[1].lower()}})
+
+                elif cmd.startswith("scroll_") and len(tokens) >= 2:
+                    direction = cmd.replace("scroll_", "")
+                    parsed_actions.append({'func': f'scroll_{direction}', 'kwargs': {}})
+
+                elif cmd == "type_text":
+                    text_content = line[len(tokens[0]):]
+                    text_content = ' '.join(text_content.split()) if text_content.strip() else text_content
+                    parsed_actions.append({'func': 'type_text', 'kwargs': {'text': text_content}})
+
+                elif cmd == "key_press" and len(tokens) >= 2:
+                    parsed_actions.append({'func': 'hotkey', 'kwargs': {'key': tokens[1]}})
+
+                elif cmd == "wait" and len(tokens) >= 2:
+                    parsed_actions.append({'func': 'wait', 'kwargs': {'seconds': float(tokens[1])}})
+
+                elif cmd == "done":
+                    parsed_actions.append({'func': 'finished', 'kwargs': {'status': 'success'}})
+
+                elif cmd == "fail":
+                    parsed_actions.append({'func': 'finished', 'kwargs': {'status': 'failure'}})
+
+            except Exception as e:
+                print(f"Error parsing plain text line: {line} - {e}")
+                continue
+
+        return parsed_actions
+
+    @staticmethod
+    def _convert_coords(x: float, y: float) -> tuple:
+        """Convert coordinates to pixels, auto-detecting permille or normalised."""
+        if x <= 1.0 and y <= 1.0 and (x > 0 or y > 0):
+            # Normalised (0.0-1.0)
+            return int(x * SCREEN_WIDTH), int(y * SCREEN_HEIGHT)
+        elif x > SCREEN_WIDTH or y > SCREEN_HEIGHT:
+            # Permille (0-1000)
+            return int(x / 1000 * SCREEN_WIDTH), int(y / 1000 * SCREEN_HEIGHT)
+        else:
+            # Already pixel
+            return int(x), int(y)
+
+    def execute_actions(self, actions: list) -> str:
+        """Execute parsed actions via VNC remote_client.
+
+        Returns status: 'unfinished', 'finished', or 'call_user'.
         """
-        Execute a list of parsed actions.
-        
-        For each action, the corresponding VNCClient_SSH method is called.
-        If a 'fail' or 'done' command is encountered, execution stops and the function returns immediately.
-        
-        Returns a tuple (status, actions_executed) where status is one of:
-          - "done" if a 'done' command was executed,
-          - "fail" if a 'fail' command was executed,
-          - "unfinished" if neither was encountered.
-        
-        Note: This function does not use error handling; any errors during execution will propagate.
-        """
-        status = "unfinished"
+        status = 'unfinished'
         for action in actions:
-            act = action.get("action")
-            time.sleep(self.remote_client.action_interval_seconds)
-            if act == "move_to":
-                self.remote_client.move_to(action["x"], action["y"])
-            elif act == "mouse_down":
-                self.remote_client.mouse_down(action["button"])
-            elif act == "mouse_up":
-                self.remote_client.mouse_up(action["button"])
-            elif act == "left_click":
-                self.remote_client.left_click()
-            elif act == "middle_click":
-                self.remote_client.middle_click()
-            elif act == "right_click":
-                self.remote_client.right_click()
-            elif act == "double_click":
-                self.remote_client.double_click()
-            elif act == "triple_click":
-                self.remote_client.triple_click()
-            elif act == "drag_to":
-                self.remote_client.drag_to(action["x"], action["y"])
-            elif act == "scroll_down":
-                self.remote_client.scroll_down(action["amount"])
-            elif act == "scroll_up":
-                self.remote_client.scroll_up(action["amount"])
-            elif act == "scroll_left":
-                self.remote_client.scroll_left(action["amount"])
-            elif act == "scroll_right":
-                self.remote_client.scroll_right(action["amount"])
-            elif act == "type_text":
-                self.remote_client.type_text(action["text"])
-            elif act == "key_press":
-                self.remote_client.key_press(action["key"])
-            elif act == "wait":
-                time.sleep(action["seconds"])
-            elif act == "fail":
-                status = "fail"
-                return status, actions
-            elif act == "done":
-                status = "done"
-                return status, actions
-        return status, actions
-    
+            act = action['func']
+            kwargs = action['kwargs']
+            try:
+                if act == 'left_click':
+                    self.remote_client.left_click()
+                elif act == 'double_click':
+                    self.remote_client.double_click()
+                elif act == 'right_click':
+                    self.remote_client.right_click()
+                elif act == 'middle_click':
+                    self.remote_client.middle_click()
+                elif act == 'move_to_pixel':
+                    self.remote_client.move_to_pixel(**kwargs)
+                elif act == 'mouse_down':
+                    self.remote_client.mouse_down(**kwargs)
+                elif act == 'mouse_up':
+                    self.remote_client.mouse_up(**kwargs)
+                elif act == 'type_text':
+                    self.remote_client.type_text(**kwargs)
+                elif act == 'hotkey':
+                    self.remote_client.key_press(**kwargs)
+                elif act == 'scroll_up':
+                    self.remote_client.scroll_up(0.5)
+                elif act == 'scroll_down':
+                    self.remote_client.scroll_down(0.5)
+                elif act == 'scroll_left':
+                    self.remote_client.scroll_left(0.5)
+                elif act == 'scroll_right':
+                    self.remote_client.scroll_right(0.5)
+                elif act == 'wait':
+                    time.sleep(kwargs.get('seconds', 5))
+                elif act in ['finished', 'call_user']:
+                    status = act
+                time.sleep(self.remote_client.action_interval_seconds)
+            except Exception as e:
+                print(f'Error executing action {action}: {e}')
+        return status
+
     def step(
         self,
-
         task_id: int,
         current_step: int,
         max_steps: int,
         env_language: str,
         task_language: str,
-
         task: str,
         task_step_timeout: int,
         save_dir: str,
     ):
-        with timeout(task_step_timeout):
-            # Capture screenshot
-            print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = 'Capturing screenshot...')
-            current_screenshot = self.remote_client.capture_screenshot()
-            self.screenshots.append(current_screenshot)
-            self.screenshots = self.screenshots[-self.screenshot_rolling_window:]
+        # Capture screenshot
+        print_message(
+            title=f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}',
+            content='Capturing screenshot...',
+        )
+        current_screenshot = self.remote_client.capture_screenshot()
 
-            # Prediction
-            print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = 'Calling GUI agent...')
-            raw_response, messages = self(task = task, screenshots = self.screenshots)
+        # Prediction
+        print_message(
+            title=f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}',
+            content='Calling GUI agent...',
+        )
+        raw_response = self.call_agent(task=task, screenshot=current_screenshot)
 
-            # Action
-            parsed_actions = self.parse_agent_output(raw_response)
-            actions_summary = '; '.join(
-                a['action'] + (' ' + a.get('key', a.get('text', f"{a.get('x','')},{a.get('y','')}" if 'x' in a else '')) if len(a) > 1 else '')
-                for a in parsed_actions
-            ) or '(empty)'
-            print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = f'Actuating: {actions_summary}')
-            status, _ = self.execute_actions(parsed_actions)
+        # Action
+        parsed_actions = self.parse_agent_output(raw_response)
+        actions_summary = '; '.join(
+            a['func'] + (' ' + str(a['kwargs']) if a['kwargs'] else '')
+            for a in parsed_actions
+        ) or '(empty)'
+        print_message(
+            title=f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}',
+            content=f'Actuating: {actions_summary}',
+        )
+        status = self.execute_actions(parsed_actions)
 
-        # Save current_screenshot
-        current_screenshot.save(os.path.join(save_dir, 'context', f'step_{str(current_step).zfill(3)}.png'))
+        # Save screenshot
+        current_screenshot.save(
+            os.path.join(save_dir, 'context', f'step_{str(current_step).zfill(3)}.png')
+        )
 
-        # Save raw_response
-        with open(os.path.join(save_dir, 'context', f'step_{str(current_step).zfill(3)}_raw_response.txt'), 'w') as f:
+        # Save raw response
+        with open(
+            os.path.join(save_dir, 'context', f'step_{str(current_step).zfill(3)}_raw_response.txt'), 'w'
+        ) as f:
             f.write(raw_response)
 
-        # Dump parsed_actions
-        with open(os.path.join(save_dir, 'context', f'step_{str(current_step).zfill(3)}_parsed_actions.json'), 'w') as f:
+        # Save parsed actions
+        with open(
+            os.path.join(save_dir, 'context', f'step_{str(current_step).zfill(3)}_parsed_actions.json'), 'w'
+        ) as f:
             json.dump(parsed_actions, f, indent=4)
-
-        # print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = f'Status: {status}')
 
         return status
 
     def save_conversation_history(self, save_dir: str):
-        pass
+        """Save conversation history and token usage to disk."""
+        self.filter_to_n_most_recent_images(0)
+
+        chat_log_path = os.path.join(save_dir, 'context', 'chat_log.json')
+        with open(chat_log_path, 'w') as f:
+            json.dump(self.messages, f)
+
+        self.token_usage.append({
+            "total_prompt_tokens": self.total_prompt_tokens,
+            "total_completion_tokens": self.total_completion_tokens,
+        })
+        token_path = os.path.join(save_dir, 'context', 'token_usage.json')
+        with open(token_path, 'w') as f:
+            json.dump(self.token_usage, f)
