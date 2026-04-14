@@ -89,17 +89,11 @@ def run_task(
         # Lume env (Apple Silicon Mac)
         from utils.lume_utils import LumeTools
         from utils.VNCClient import VNCClient_Lume
-        from constants import lume_snapshot_lookup
 
         # Clean up any stale VMs from previous crashed runs
         LumeTools.cleanup_stale_vms()
 
-        golden_vm_name = lume_snapshot_lookup.get(snapshot_name)
-        if golden_vm_name is None:
-            raise ValueError(
-                f"No Lume golden VM mapping for snapshot '{snapshot_name}'. "
-                f"Available mappings: {list(lume_snapshot_lookup.keys())}"
-            )
+        golden_vm_name = lume_golden_vm
 
         task_vm_name = f"macosworld_{uuid.uuid4().hex[:8]}"
         lume_tools = LumeTools(
