@@ -330,7 +330,7 @@ GOLDEN_VM='macos-tahoe-cua_macosworld-zh'
 TASK_LANG='task_zh_env_zh'
 
 # --- Choose task set ---
-TASK_PATH='./tasks/sys_apps_single'
+TASK_PATH='./tasks/sys_apps'
 
 # --- Choose result path ---
 TASK_RESULT_PATH='./results/macos26/tione_zh_single'
