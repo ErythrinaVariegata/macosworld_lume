@@ -47,17 +47,17 @@ This fork supports **two VM backends**:
 
 | | VMware Implementation | Lume Implementation |
 |---|---|---|
-| **Platform** | Ubuntu (Intel/AMD with AVX2) | macOS (Apple Silicon) |
+| **Platform** | Windows / Linux (Intel/AMD with AVX2) | macOS (Apple Silicon) |
 | **Virtualisation** | VMware Workstation | Apple Virtualization.framework via [Lume](https://cua.ai/docs/lume/guide/getting-started/introduction) |
 | **Env Reset** | Snapshot revert | APFS clone (copy-on-write) |
 | **Reset Time** | ~1 min | ~40 s (clone + boot + setup) |
 | **Display** | VMware VNC via SSH tunnel | Direct VNC (Retina 2x auto-scaled) |
 | **iMovie Tasks** | Not supported | Not supported |
 
-### ⚠️ Requirements -- VMware
+### ⚠️ Requirements -- VMware (Windows / Linux)
 
  - Minimum hardware requirements: 
-     - Ubuntu machines with Intel/AMD CPUs supporting AVX2 ([Check CPU AVX2 support](https://avx2checker.com/))
+     - Windows / Linux machines with Intel/AMD CPUs supporting AVX2 ([Check CPU AVX2 support](https://avx2checker.com/))
      - 32 GB of RAM
      - 400 GB of free disk space
 
@@ -68,7 +68,7 @@ This fork supports **two VM backends**:
  - [Lume CLI](https://cua.ai/docs/lume/guide/getting-started/installation) v0.3.9+
  - 32 GB of RAM recommended
  - 200 GB of free disk space
- - A prepared golden VM (see [Step 2-L](#step-2-l-local-environment-configuration----lume))
+ - A prepared golden VM (see [Step 2, Option A](#option-a-lume--macos-with-apple-silicon-recommended))
 
 ### Supported Task Categories
 
@@ -106,11 +106,12 @@ This fork supports **two VM backends**:
 
 This implementation consists of a Python testbench script and a VM-based macOS environment (VMware or Lume). Both run locally, despite the testbench may require access to online APIs. The benchmark process involves four main steps:
 
- - **[Step 1: Local Environment Configuration -- General](#step-1-local-environment-configuration----general)**
-     - [1.1. Base Environment Setup](#11-base-environment-setup)  
+ - **[Step 1: Environment Setup](#step-1-environment-setup)**
+     - [1.1. Install Dependencies](#11-install-dependencies)  
      - [1.2. Model-Specific Configurations](#12-model-specific-configurations)  
- - **[Step 2: Local Environment Configuration -- VMware](#step-2-local-environment-configuration----vmware)** *(Intel/AMD)*
- - **[Step 2-L: Local Environment Configuration -- Lume](#step-2-l-local-environment-configuration----lume)** *(Apple Silicon)*
+ - **[Step 2: VM Environment Setup](#step-2-vm-environment-setup)** *(choose one)*
+     - [Option A: Lume — macOS with Apple Silicon (Recommended)](#option-a-lume--macos-with-apple-silicon-recommended)
+     - [Option B: VMware — Windows / Linux with Intel/AMD](#option-b-vmware--windows--linux-with-intelamd)
  - **[Step 3: Running the Benchmark](#step-3-running-the-benchmark)**  
      - [3.1. Execute Benchmark (VMware)](#31-execute-benchmark-vmware)
      - [3.2. Execute Benchmark (Lume)](#32-execute-benchmark-lume)
@@ -121,14 +122,14 @@ This implementation consists of a Python testbench script and a VM-based macOS e
 
 <br/>
 
-### Step 1: Local Environment Configuration -- General
+### Step 1: Environment Setup
 
-#### 1.1. Base Environment Setup
+#### 1.1. Install Dependencies
 
 ```bash
-conda create -n macosworld python=3.9.21
-conda activate macosworld
-pip install vncdotool==1.2.0 boto3==1.36.20 sshtunnel httpx[socks] openai anthropic google-auth google_cloud_aiplatform jupyter
+uv venv .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
 ```
 
 #### 1.2. Model-Specific Configurations
@@ -183,19 +184,13 @@ NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve "bytedance-research/U
 
 <br/>
 
-### Step 2: Local Environment Configuration -- VMware
+### Step 2: VM Environment Setup
 
-> **Note:** Skip this section if you are using Lume on Apple Silicon. Jump to [Step 2-L](#step-2-l-local-environment-configuration----lume).
+> Choose **one** backend based on your platform.
 
-Please follow the instructions [here](./instructions/configure_vmware_env.md) to set up the VMware environment.
+#### Option A: Lume — macOS with Apple Silicon (Recommended)
 
-<br/>
-
-### Step 2-L: Local Environment Configuration -- Lume
-
-> **Note:** This section is for Apple Silicon Macs only. Skip if you are using VMware.
-
-#### 2-L.1. Install Lume
+**A.1. Install Lume**
 
 ```bash
 # Install Lume CLI (v0.3.9+)
@@ -205,27 +200,35 @@ Please follow the instructions [here](./instructions/configure_vmware_env.md) to
 lume --version
 ```
 
-#### 2-L.2. Create a Golden VM
+**A.2. Pull a Golden VM**
 
-Create a macOS VM that will serve as the template for all benchmark tasks:
+Golden VMs are pre-configured macOS images that serve as the template for all benchmark tasks. Two macOS versions are available:
+
+| Golden VM | macOS Version | GHCR Package |
+|-----------|---------------|--------------|
+| `macos-tahoe-cua` | macOS 26 (Tahoe) | [ghcr.io/erythrinavariegata/macos-tahoe-cua](https://github.com/users/ErythrinaVariegata/packages/container/package/macos-tahoe-cua) |
+| `macos-sequoia-cua-sparse` | macOS 15 (Sequoia) | [ghcr.io/erythrinavariegata/macos-sequoia-cua-sparse](https://github.com/users/ErythrinaVariegata/packages/container/package/macos-sequoia-cua-sparse) |
+
+Each image ships with language-specific tags (e.g. `macosworld-en`, `macosworld-zh`).
 
 ```bash
-# Pull or create a macOS Tahoe VM, Sequoia VM still in process
+# Pull a Tahoe golden VM (macOS 26)
 lume pull macos-tahoe-cua:macosworld-en --registry ghcr.io --organization erythrinavariegata
-# Or create from an IPSW:
-# lume create macos-tahoe-cua_macosworld-en --os macos --ipsw /path/to/UniversalMac_15.x.ipsw
+lume pull macos-tahoe-cua:macosworld-zh --registry ghcr.io --organization erythrinavariegata
+
+# Pull a Sequoia golden VM (macOS 15)
+lume pull macos-sequoia-cua-sparse:macosworld-en --registry ghcr.io --organization erythrinavariegata
+lume pull macos-sequoia-cua-sparse:macosworld-zh --registry ghcr.io --organization erythrinavariegata
 ```
 
-Configure the golden VM:
+After pulling, verify:
+```bash
+lume ls    # should show the pulled VM(s) in "stopped" state
+```
 
-1. Start the VM: `lume run macos-tahoe-cua_macosworld-en`
-2. Complete macOS initial setup (username: `lume`, password: `lume`)
-3. Enable SSH: System Settings > General > Sharing > Remote Login
-4. Install any required apps for the benchmark tasks
-5. Import test data (contacts, reminders, notes, etc.) as needed by the tasks
-6. Stop the VM: `lume stop macos-tahoe-cua_macosworld-en`
+> **Note:** The golden VM naming convention after pull is `<image>_<tag>`, e.g. `macos-tahoe-cua_macosworld-en`. This is the name you pass to `--lume_golden_vm`.
 
-#### 2-L.3. Grant TCC Permissions (Critical)
+**A.3. Grant TCC Permissions (Critical)**
 
 macOS requires explicit TCC (Transparency, Consent, and Control) permissions for SSH-based osascript access. **Without this step, grading commands will hang indefinitely.**
 
@@ -242,21 +245,27 @@ lume stop macos-tahoe-cua_macosworld-en
 
 The script triggers osascript commands that produce TCC permission dialogs. For each dialog, connect to the VM via VNC (Screen Sharing) and click **"Allow"**. Alternatively, use the keyboard shortcut **Tab + Space** to approve.
 
-Apps that need TCC permission: Contacts, Reminders, Notes, Music, Keynote, Numbers, Pages, Script Editor, Finder, System Events.
+Apps that need TCC permission: Contacts, Reminders, Notes, Music, Keynote, Numbers, Pages, Script Editor, Finder, System Events, Calendar, Automator, Xcode, QuickTime Player.
 
 > **Tip:** After granting permissions once on the golden VM, all cloned VMs inherit them automatically. The testbench also includes an auto-grant fallback that uses VNC keyboard automation (Tab + Space) if any permissions are missing.
 
-#### 2-L.4. Configure Golden VM Mapping
+**A.4. Configure Golden VM Mapping (Optional)**
 
-Edit `constants.py` to map snapshot names to your golden VM:
+The default `constants.py` already maps snapshot names to the pre-built golden VMs:
 
 ```python
 lume_snapshot_lookup = {
     'snapshot_used_en': 'macos-tahoe-cua_macosworld-en',
-    # Add other language VMs as needed:
-    # 'snapshot_used_zh': 'golden_used_zh',
+    'snapshot_used_zh': 'macos-tahoe-cua_macosworld-zh',
+    # Add other language/version VMs as needed
 }
 ```
+
+> **Note:** When using `--lume_golden_vm`, you pass the golden VM name directly (e.g. `macos-tahoe-cua_macosworld-en` or `macos-sequoia-cua-sparse_macosworld-zh`). The `lume_snapshot_lookup` mapping is only used internally when the task JSON references a snapshot name.
+
+#### Option B: VMware — Windows / Linux with Intel/AMD
+
+Please follow the instructions [here](./instructions/configure_vmware_env.md) to set up the VMware environment.
 
 <br/>
 
@@ -290,16 +299,56 @@ python run.py \
 
 #### 3.2. Execute Benchmark (Lume)
 
-For Apple Silicon Macs using Lume, use `--lume_golden_vm` instead of `--vmx_path`:
+For Apple Silicon Macs using Lume, use `--lume_golden_vm` instead of `--vmx_path`.
+
+**Quick start with `run.sh`:**
+
+Edit `run.sh` to configure your golden VM and task settings, then:
+```bash
+bash run.sh
+```
+
+The provided `run.sh` contains all available golden VM and language combinations as comments — uncomment the one you need:
 
 ```bash
-# API Keys (configure as needed)
-export OPENAI_API_KEY=🧩'sk-proj-...'
-# For TiOne models:
-export MODEL_BASE_URL=🧩'https://your-tione-endpoint/v1'
-export MODEL_API_KEY=🧩'your-api-key'
+source .venv/bin/activate
 
-# Run the benchmark with Lume
+# Model endpoint (for TiOne / Qwen agents)
+export MODEL_BASE_URL='https://your-model-endpoint/v1'
+export MODEL_API_KEY='your-api-key'
+
+# --- Choose a golden VM ---
+# macOS 26 (Tahoe)
+#GOLDEN_VM='macos-tahoe-cua_macosworld-en'
+GOLDEN_VM='macos-tahoe-cua_macosworld-zh'
+# macOS 15 (Sequoia)
+#GOLDEN_VM='macos-sequoia-cua-sparse_macosworld-en'
+#GOLDEN_VM='macos-sequoia-cua-sparse_macosworld-zh'
+
+# --- Choose language ---
+#TASK_LANG='task_en_env_en'
+TASK_LANG='task_zh_env_zh'
+
+# --- Choose task set ---
+TASK_PATH='./tasks/sys_apps_single'
+
+# --- Choose result path ---
+TASK_RESULT_PATH='./results/macos26/tione_zh_single'
+
+python run.py \
+    --lume_golden_vm $GOLDEN_VM \
+    --gui_agent_name tione \
+    --paths_to_eval_tasks $TASK_PATH \
+    --languages $TASK_LANG \
+    --base_save_dir $TASK_RESULT_PATH \
+    --max-steps 30 \
+    --snapshot_recovery_timeout_seconds 120 \
+    --task_step_timeout 120
+```
+
+**Or run directly:**
+
+```bash
 python run.py \
     --lume_golden_vm 🧩macos-tahoe-cua_macosworld-en \
     --gui_agent_name 🧩tione \
@@ -345,8 +394,8 @@ python run.py \
     - `showlab/ShowUI-2B`
 
 5. **Custom API-Compatible Models:**
-    - `tione` or `tione/<model_name>` -- TiOne OpenAI-compatible API (requires `MODEL_BASE_URL` and `MODEL_API_KEY` env vars)
-    - `qwen/<model_name>` -- Qwen2.5-VL via OpenAI-compatible API (requires `MODEL_BASE_URL` and `MODEL_API_KEY` env vars)
+    - `tione` or `tione/<model_name>` -- TiOne OpenAI-compatible API. Uses Claude CUA-style tool calling with `<tool_call>` XML format. Supports the full action space: key, type, mouse_move, left_click, right_click, double_click, scroll, drag, wait, screenshot, terminate. Requires `MODEL_BASE_URL` and `MODEL_API_KEY` env vars.
+    - `qwen/<model_name>` -- Qwen2.5-VL via OpenAI-compatible API. Uses Qwen's native `computer_use` tool format. Requires `MODEL_BASE_URL` and `MODEL_API_KEY` env vars. **Note: this agent is experimental and has not been fully tested.**
 
 **Supported Language Codes**: English (`en`), Chinese (`zh`), Arabic (`ar`), Japanese (`ja`), Russian (`ru`)
 
