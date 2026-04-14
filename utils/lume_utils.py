@@ -378,6 +378,9 @@ class LumeTools:
             ("Pages", 'tell application "Pages" to return 1'),
             ("ScriptEditor", 'tell application "Script Editor" to return 1'),
             ("QuickTime", 'tell application "QuickTime Player" to return 1'),
+            ("Calendar", 'tell application "Calendar" to get the name of every calendar'),
+            ("Automator", 'tell application "Automator" to return 1'),
+            ("Xcode", 'tell application "Xcode" to return 1'),
         ]
 
         print_message("Checking TCC permissions for osascript grading...", title="Lume")
@@ -462,7 +465,11 @@ class LumeTools:
             "osascript -e 'tell application \"Music\" to quit' 2>/dev/null; "
             "osascript -e 'tell application \"Keynote\" to quit' 2>/dev/null; "
             "osascript -e 'tell application \"Numbers\" to quit' 2>/dev/null; "
-            "osascript -e 'tell application \"Pages\" to quit' 2>/dev/null"
+            "osascript -e 'tell application \"Pages\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Calendar\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Automator\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"Xcode\" to quit' 2>/dev/null; "
+            "osascript -e 'tell application \"QuickTime Player\" to quit' 2>/dev/null"
         )
 
         print_message("TCC permission granting complete", title="Lume")

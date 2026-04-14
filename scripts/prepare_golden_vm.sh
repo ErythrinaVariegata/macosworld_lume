@@ -36,6 +36,10 @@ APPS=(
     "Pages"
     "Script Editor"
     "Finder"
+    "Automator"
+    "Xcode"
+    "Calendar"
+    "QuickTime Player"
 )
 
 # Step 1: Trigger AppleEvents TCC dialogs (automation permission)
@@ -71,6 +75,12 @@ read -r
 
 echo "  Probing: System Events accessibility"
 lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"System Events\" to get the name of every process whose frontmost is true'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+echo "  -> Click 'Allow' if a TCC dialog appeared, then press Enter"
+read -r
+
+echo "  Probing: Calendar data access"
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Calendar\" to get the name of every calendar'" \
     -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
 echo "  -> Click 'Allow' if a TCC dialog appeared, then press Enter"
 read -r
@@ -132,6 +142,22 @@ lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Numbers\" to return 1'" 
 
 echo "  Exercising Pages scripting..."
 lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Pages\" to return 1'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+echo "  Exercising Calendar scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Calendar\" to get the name of every calendar'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 60 2>&1 || true
+
+echo "  Exercising Automator scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Automator\" to return 1'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+echo "  Exercising Xcode scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Xcode\" to return 1'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+echo "  Exercising QuickTime Player scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"QuickTime Player\" to return 1'" \
     -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
 
 # Close all the apps we opened (clean state for golden VM)
