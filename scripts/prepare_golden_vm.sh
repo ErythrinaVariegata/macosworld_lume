@@ -81,8 +81,71 @@ lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Finder\" to get the name
 echo "  -> Click 'Allow' if a TCC dialog appeared, then press Enter"
 read -r
 
-# Step 3: Verify TCC permissions
-echo "--- Step 3: Verifying TCC permissions ---"
+# Step 3: Deep Apple Events warmup
+# Launch each app and exercise its scripting interface so macOS caches
+# the Apple Events connection.  This prevents the first osascript call
+# in a cloned VM from timing out during grading.
+echo "--- Step 3: Deep Apple Events warmup ---"
+for app in "${APPS[@]}"; do
+    echo "  Warming up: $app"
+    # Launch the app
+    lume ssh "$GOLDEN_VM" "open -a \"$app\"" \
+        -u "$SSH_USER" -p "$SSH_PASS" -t 15 2>&1 || true
+    sleep 3
+done
+
+echo "  Waiting 10s for apps to initialise..."
+sleep 10
+
+# Exercise each app's scripting interface with real data queries
+echo "  Exercising Reminders scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Reminders\" to get the name of every reminder whose completed is false'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 60 2>&1 || true
+
+echo "  Exercising Contacts scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Contacts\" to get the name of every person'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 60 2>&1 || true
+
+echo "  Exercising Notes scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Notes\" to get the name of every note'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 60 2>&1 || true
+
+echo "  Exercising Finder scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Finder\" to get the name of every window'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+echo "  Exercising System Events scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"System Events\" to get the name of every process whose frontmost is true'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+echo "  Exercising Music scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Music\" to return 1'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+echo "  Exercising Keynote scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Keynote\" to return 1'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+echo "  Exercising Numbers scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Numbers\" to return 1'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+echo "  Exercising Pages scripting..."
+lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"Pages\" to return 1'" \
+    -u "$SSH_USER" -p "$SSH_PASS" -t 30 2>&1 || true
+
+# Close all the apps we opened (clean state for golden VM)
+echo "  Closing warmed-up apps..."
+for app in "${APPS[@]}"; do
+    lume ssh "$GOLDEN_VM" "osascript -e 'tell application \"$app\" to quit'" \
+        -u "$SSH_USER" -p "$SSH_PASS" -t 10 2>&1 || true
+done
+sleep 5
+echo "  Apple Events warmup complete."
+echo ""
+
+# Step 4: Verify TCC permissions
+echo "--- Step 4: Verifying TCC permissions ---"
 lume ssh "$GOLDEN_VM" "sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \"SELECT service, auth_value, indirect_object_identifier FROM access WHERE client LIKE '%sshd%';\"" \
     -u "$SSH_USER" -p "$SSH_PASS" -t 10 2>&1
 

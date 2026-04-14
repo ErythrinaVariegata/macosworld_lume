@@ -21,10 +21,20 @@ def clean_directories(base_save_dir):
                     files = os.listdir(subdirectory_path)
                     
                     # Check if there is at least one .txt file in the subdirectory
-                    if not any(file.endswith('.txt') for file in files):
+                    has_txt = any(file.endswith('.txt') for file in files)
+                    if not has_txt:
                         # If no .txt files are found, delete the subdirectory
-                        print_message(f"Deleting: {subdirectory_path}", title = 'cleanup.py')
+                        print_message(f"Deleting (incomplete): {subdirectory_path}", title = 'cleanup.py')
                         shutil.rmtree(subdirectory_path)
+                    else:
+                        # Also clean up eval_failed results so they can be retried
+                        eval_result_path = os.path.join(subdirectory_path, 'eval_result.txt')
+                        if os.path.isfile(eval_result_path):
+                            with open(eval_result_path, 'r') as f:
+                                first_line = f.readline().strip()
+                            if first_line == 'eval_failed':
+                                print_message(f"Deleting (eval_failed): {subdirectory_path}", title = 'cleanup.py')
+                                shutil.rmtree(subdirectory_path)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -11,9 +11,9 @@ import time
 
 from utils.log import print_message
 
-SSH_TIMEOUT = "30"          # lume ssh -t value (seconds)
-SUBPROCESS_TIMEOUT = 45     # subprocess.run hard kill (seconds)
-GRADING_RETRY_COUNT = 2     # extra attempts after first timeout
+SSH_TIMEOUT = "60"          # lume ssh -t value (seconds)
+SUBPROCESS_TIMEOUT = 75     # subprocess.run hard kill (seconds)
+GRADING_RETRY_COUNT = 3     # extra attempts after first timeout
 
 
 class LumeEvaluator:
@@ -74,15 +74,20 @@ class LumeEvaluator:
     def _warmup_app(self, app_name: str):
         """Launch an app and give it time to initialise its data stores."""
         print_message(f'Warming up "{app_name}" before retry...', title="Lume Eval")
-        self._run_lume_ssh(f'open -a "{app_name}"', timeout="10", subprocess_timeout=15)
-        time.sleep(5)
-        # Lightweight probe to trigger data store init
-        self._run_lume_ssh(
+        # Step 1: Force-launch the app
+        self._run_lume_ssh(f'open -a "{app_name}"', timeout="15", subprocess_timeout=20)
+        time.sleep(8)
+        # Step 2: Lightweight probe to trigger Apple Events / data store init
+        success, output = self._run_lume_ssh(
             f'osascript -e \'tell application "{app_name}" to return 1\'',
-            timeout="15",
-            subprocess_timeout=20,
+            timeout="30",
+            subprocess_timeout=40,
         )
-        time.sleep(3)
+        if not success:
+            print_message(f'Warmup probe failed for "{app_name}": {output}', title="Lume Eval")
+            time.sleep(5)
+        else:
+            time.sleep(3)
 
     def run_command(self, command: str) -> tuple:
         """Run a command on the guest, retrying on timeout with app warm-up."""
