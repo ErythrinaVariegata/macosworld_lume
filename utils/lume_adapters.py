@@ -72,22 +72,45 @@ class LumeEvaluator:
         return m.group(1) if m else None
 
     def _warmup_app(self, app_name: str):
-        """Launch an app and give it time to initialise its data stores."""
-        print_message(f'Warming up "{app_name}" before retry...', title="Lume Eval")
+        """Launch an app and fully initialise its Apple Events connection."""
+        print_message(f'Warming up "{app_name}"...', title="Lume Eval")
         # Step 1: Force-launch the app
         self._run_lume_ssh(f'open -a "{app_name}"', timeout="15", subprocess_timeout=20)
-        time.sleep(8)
-        # Step 2: Lightweight probe to trigger Apple Events / data store init
+        time.sleep(5)
+        # Step 2: Heavy probe — actually exercise the scripting interface
+        # "return 1" is too light; a real data query forces full AE init
+        heavy_probes = {
+            "Reminders": 'tell application "Reminders" to get the name of every list',
+            "Contacts": 'tell application "Contacts" to count every person',
+            "Notes": 'tell application "Notes" to count every note',
+            "Calendar": 'tell application "Calendar" to get the name of every calendar',
+        }
+        probe = heavy_probes.get(app_name, f'tell application "{app_name}" to return 1')
         success, output = self._run_lume_ssh(
-            f'osascript -e \'tell application "{app_name}" to return 1\'',
-            timeout="30",
-            subprocess_timeout=40,
+            f"osascript -e '{probe}'",
+            timeout="60",
+            subprocess_timeout=75,
         )
         if not success:
             print_message(f'Warmup probe failed for "{app_name}": {output}', title="Lume Eval")
             time.sleep(5)
         else:
-            time.sleep(3)
+            time.sleep(2)
+
+    def _pre_warmup_for_grading(self, eval_configs: list):
+        """Pre-warm apps that will be used in grading commands.
+
+        Called once before any grading attempts to avoid first-call timeout.
+        """
+        app_names = set()
+        for eval_config in eval_configs:
+            command = eval_config[0]
+            app_name = self._extract_app_name(command)
+            if app_name:
+                app_names.add(app_name)
+
+        for app_name in app_names:
+            self._warmup_app(app_name)
 
     def run_command(self, command: str) -> tuple:
         """Run a command on the guest, retrying on timeout with app warm-up."""
@@ -116,6 +139,10 @@ class LumeEvaluator:
             if binary_grading
             else eval_configs
         )
+
+        # Pre-warm apps before grading to avoid first-call AE timeout
+        self._pre_warmup_for_grading(filtered_eval_configs)
+
         for eval_config in filtered_eval_configs:
             command, return_value = eval_config
             success, output = self.run_command(command)
