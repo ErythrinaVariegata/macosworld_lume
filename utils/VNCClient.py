@@ -421,10 +421,11 @@ class VNCClient_SSH:
         if len(key) == 1:
             return self._filter_text(key)
         
-        # Split the string using `-` into a list of strings
-        substrings = key.split('-')
+        # Split the string using `-` or `+` into a list of strings
+        import re as _re
+        substrings = _re.split(r'[-+]', key)
         processed_substrings = []
-        
+
         for substring in substrings:
             if len(substring) >= 2:
                 substring = substring.lower()
@@ -442,7 +443,7 @@ class VNCClient_SSH:
             elif len(substring) == 1:
                 if ord(substring) < 128:  # Check if it's an ASCII character
                     processed_substrings.append(substring)
-        
+
         # Reconnect and return all the sub-strings using `-`; if nothing is left, return None (don't return an empty string)
         result = '-'.join(processed_substrings)
         return result if result else None
@@ -730,7 +731,8 @@ class VNCClient_Lume:
         if len(key) == 1:
             return self._filter_text(key)
 
-        substrings = key.split("-")
+        import re as _re
+        substrings = _re.split(r'[-+]', key)
         processed_substrings = []
 
         for substring in substrings:
