@@ -1,10 +1,35 @@
 import argparse
+import signal
 import sys
 import subprocess
 import socket
 
 from utils.log import print_message
 from utils.completion_checker import all_tasks_completed
+
+
+# --- Graceful Ctrl+C shutdown ---
+_child_process = None
+
+def _sigint_handler(sig, frame):
+    print_message("Ctrl+C received, shutting down...", title="run.py")
+    if _child_process is not None and _child_process.poll() is None:
+        print_message("Terminating testbench subprocess...", title="run.py")
+        _child_process.terminate()
+        try:
+            _child_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _child_process.kill()
+    # Clean up any Lume VMs left by the interrupted testbench
+    try:
+        from utils.lume_utils import LumeTools
+        LumeTools.cleanup_stale_vms()
+        print_message("Stale VMs cleaned up", title="run.py")
+    except Exception:
+        pass
+    sys.exit(130)
+
+signal.signal(signal.SIGINT, _sigint_handler)
 
 parser = argparse.ArgumentParser()
 
@@ -103,6 +128,7 @@ while True:
     print_message(f'Communicating with testbench on {host}:{port}', title = 'run.py')
     cmd += ["--port", str(port)]
     p = subprocess.Popen(cmd)
+    _child_process = p
     srv.settimeout(TESTBENCH_TIMEOUT_SECONDS)
     try:
         conn, _ = srv.accept()
