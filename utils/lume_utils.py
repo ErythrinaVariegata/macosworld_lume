@@ -88,13 +88,49 @@ class LumeTools:
             )
             return {}
 
+    @staticmethod
+    def vm_exists(vm_name: str) -> bool:
+        """Check if a VM exists in Lume."""
+        try:
+            result = subprocess.run(
+                ["lume", "get", vm_name, "-f", "json"],
+                capture_output=True, text=True, timeout=15,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    @staticmethod
+    def list_vms() -> list:
+        """List all available Lume VMs."""
+        try:
+            result = subprocess.run(
+                ["lume", "ls", "-f", "json"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode != 0:
+                return []
+            data = json.loads(result.stdout)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
     def clone_from_golden(self, golden_vm_name: str) -> bool:
         """Clone a new VM from a golden (template) VM.
 
         The golden VM must be in a stopped state.
+        Raises ValueError immediately if the golden VM does not exist.
 
         Returns True on success.
         """
+        # Fail fast if golden VM doesn't exist
+        if not self.vm_exists(golden_vm_name):
+            available = [vm.get("name", "") for vm in self.list_vms()]
+            raise ValueError(
+                f'Golden VM "{golden_vm_name}" not found. '
+                f'Available VMs: {available}'
+            )
+
         print_message(
             f'Cloning "{golden_vm_name}" → "{self.vm_name}"',
             title="Lume",
@@ -171,6 +207,8 @@ class LumeTools:
 
     def stop_and_cleanup(self):
         """Stop the VM and delete it. Best-effort; logs warnings on failure."""
+        if not self.vm_exists(self.vm_name):
+            return
         self.stop_vm()
         # Give the VM a moment to fully shut down
         time.sleep(2)
