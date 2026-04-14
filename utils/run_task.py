@@ -12,24 +12,21 @@ from utils.vmware_utils import VMwareTools
 
 from agent.get_gui_agent import get_gui_agent
 
-from constants import ami_lookup_table
+from constants import ami_lookup_table, lume_snapshot_lookup
 
 
 def inprocess_result_matching(inprocess_stdout: str, inprocess_gold_elements: list, inprocess_distracting_elements: list):
+    inprocess_eval_result = None
     # Match handled properly
     for element in inprocess_gold_elements:
         if element.lower() in inprocess_stdout.lower():
-            inprocess_eval_result = 'gold'
-            break
+            return 'gold'
     # Match distracted
     for element in inprocess_distracting_elements:
         if element.lower() in inprocess_stdout.lower():
-            inprocess_eval_result = 'distracted'
-            break
+            return 'distracted'
     # No match
-    if inprocess_eval_result is None:
-        inprocess_eval_result = 'error_no_match'
-    return inprocess_eval_result
+    return 'error_no_match'
 
 def run_task(
     # Task-related params
@@ -93,7 +90,10 @@ def run_task(
         # Clean up any stale VMs from previous crashed runs
         LumeTools.cleanup_stale_vms()
 
-        golden_vm_name = lume_golden_vm
+        # Resolve the golden VM name for this task's snapshot.
+        # If snapshot_name has a mapping in lume_snapshot_lookup, use it;
+        # otherwise fall back to the CLI --lume_golden_vm value.
+        golden_vm_name = lume_snapshot_lookup.get(snapshot_name, lume_golden_vm)
 
         task_vm_name = f"macosworld_{uuid.uuid4().hex[:8]}"
         lume_tools = LumeTools(

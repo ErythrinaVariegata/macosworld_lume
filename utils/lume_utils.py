@@ -23,10 +23,10 @@ class LumeTools:
 
     @staticmethod
     def cleanup_stale_vms(prefix: str = "macosworld_"):
-        """Delete any stopped VMs whose names start with the given prefix.
+        """Delete any stale VMs whose names start with the given prefix.
 
-        This is a best-effort garbage collector for VMs left over from
-        previous runs that crashed before cleanup.
+        Handles both stopped and running VMs left over from previous
+        runs that crashed before cleanup.
         """
         try:
             result = subprocess.run(
@@ -42,12 +42,20 @@ class LumeTools:
             for vm in vms:
                 name = vm.get("name", "")
                 status = vm.get("status", "")
-                if name.startswith(prefix) and status == "stopped":
-                    print_message(f'Cleaning up stale VM "{name}"', title="Lume")
+                if not name.startswith(prefix):
+                    continue
+                if status == "running":
+                    print_message(f'Stopping stale running VM "{name}"', title="Lume")
                     subprocess.run(
-                        ["lume", "delete", name, "--force"],
-                        capture_output=True, text=True, timeout=30,
+                        ["lume", "stop", name],
+                        capture_output=True, text=True, timeout=60,
                     )
+                    time.sleep(2)
+                print_message(f'Cleaning up stale VM "{name}"', title="Lume")
+                subprocess.run(
+                    ["lume", "delete", name, "--force"],
+                    capture_output=True, text=True, timeout=30,
+                )
         except Exception:
             pass  # best-effort
 
