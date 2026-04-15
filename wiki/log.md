@@ -23,3 +23,13 @@ Discovered by scanning all 221 task JSONs for `tell application` patterns in gra
 ## [2026-04-14] ingest | VM limit diagnosis
 
 Root cause of persistent `lume run` failures: macOS Virtualization.framework caps concurrent VMs. Stale `lume run` processes from previous crashed sessions consumed all slots. Fix: kill orphaned processes before starting new VMs. Documented in [lume-backend](lume-backend.md) failure modes.
+
+## [2026-04-15] ingest | Pipeline analysis documents consolidation
+
+Moved 5 top-level generated analysis files (macosworld_lume_ANALYSIS.md, macosworld_lume_ARCHITECTURE.md, macosworld_lume_SUMMARY.md, README_ANALYSIS.md, START_HERE.md) to `wiki/raw/` as immutable sources.
+
+Extracted unique content into wiki pages:
+- **architecture.md** — added retry hierarchy (4 levels), error classification table, file-based state machine diagram
+- **decisions.md** — added 5 new entries: strategy pattern for VM backends, file-based state, hierarchical retry, try-finally cleanup guarantee, async event injection
+- **pipeline-reference.md** (new) — CLI parameters, function signatures, deployment examples, supporting utilities reference
+- **scaling.md** (new) — single-machine vs distributed architecture, extension points, future monitoring metrics

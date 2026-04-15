@@ -44,3 +44,33 @@ Technical decisions made during the Lume migration and their rationale.
 **Decision:** `run.py` creates a TCP socket, passes the port to `testbench.py`, and waits for a "DONE" message with a 12-hour timeout.
 
 **Why:** `subprocess.run` timeout doesn't work well for long-running processes. The socket approach lets `run.py` kill a stuck testbench after 12 hours, clean up, and restart. Interrupted tasks get re-benchmarked on the next loop iteration.
+
+## Strategy pattern for VM backends
+
+**Decision:** `run_task()` selects one of three VM backends (Lume / VMware / EC2) via CLI flags (`--lume_golden_vm`, `--vmx_path`, or default EC2) using if/elif/else branching.
+
+**Why:** Each backend has distinct lifecycle semantics (clone vs revert vs replace-root-volume) but the 8-phase execution pipeline is identical. The strategy selection at Phase 1 keeps the rest of `run_task()` backend-agnostic.
+
+## File-based state machine instead of database
+
+**Decision:** Task state is tracked by file presence (`eval_result.txt`, `fail.flag`, `context/`) in the results directory rather than a database.
+
+**Why:** No external dependency, works on any filesystem, naturally idempotent. `cleanup.py` and `completion_checker.py` can operate by scanning directories without coordination. Also enables future distributed execution where workers write to a shared NFS mount without locking.
+
+## Hierarchical retry with 4 levels
+
+**Decision:** Retries are nested at 4 levels: task attempt (testbench), VM reset (run_task Phase 1), SSH connectivity (Phase 2), and pre-command (Phase 3).
+
+**Why:** Different failure modes require different recovery strategies. A transient SSH failure shouldn't restart the whole task; a VM clone failure shouldn't abort the benchmark. Each level catches failures at the appropriate granularity and escalates only when retries are exhausted.
+
+## Try-finally guaranteed cleanup
+
+**Decision:** `run_task()` wraps Phases 1-7 in `try:` and VNC disconnect + Lume VM cleanup in `finally:`. Cleanup exceptions are caught and logged but never re-raised.
+
+**Why:** Resource leaks (orphaned VMs, dangling VNC connections) are worse than swallowed cleanup errors. Even if grading crashes with an unhandled exception, the ephemeral VM is always destroyed and VNC is always disconnected.
+
+## Async in-process event injection
+
+**Decision:** Distraction events use a background `AsyncSSHCommandHandler` that runs an SSH command during the agent loop and captures stdout/stderr after the loop finishes.
+
+**Why:** The distraction test needs the event to occur concurrently with agent steps — blocking would defeat the purpose. The handler injects at a specific timestep, then results are evaluated against gold/distraction criteria to measure agent focus resilience.

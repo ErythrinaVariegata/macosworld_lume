@@ -139,6 +139,52 @@ macosworld_lume/
 └── wiki/                     # documentation
 ```
 
+## Retry Logic Hierarchy
+
+The system uses 4 nested retry levels, each handling failures at different granularity:
+
+```
+Level 1 — Task attempt (testbench.py)
+  for attempt = 1..task_max_attempts:
+    │
+    └─ Level 2 — Environment reset (run_task Phase 1)
+       │  Lume: 3 retries with full VM cleanup between attempts
+       │  VMware: 5 retries
+       │  AWS: polling until timeout
+       │
+       └─ Level 3 — SSH connectivity (run_task Phase 2)
+          │  Poll every 10s until connected or timeout
+          │
+          └─ Level 4 — Pre-command (run_task Phase 3)
+             │  up to pre_command_max_trials retries
+             └─ if force_error_free_prep and failed → RuntimeError
+```
+
+If a task fails all Level 1 attempts → `fail.flag` created. On the next `run.py` cycle, `cleanup.py` deletes the directory and testbench retries from scratch.
+
+## Error Classification
+
+| Class | Examples | Behaviour |
+|-------|----------|-----------|
+| **Critical (hard fail)** | `ValueError`, `AssertionError`, `RuntimeError` from Lume clone exhaustion or forced prep failure | Bubbles up; task marked failed |
+| **Recoverable (soft fail)** | `TimeoutException`, `TimeoutError`, SSH failures | Caught by testbench retry loop |
+| **Non-fatal (logged only)** | VNC disconnect errors, Lume cleanup errors | Swallowed in `finally` block; never prevents cleanup |
+
+## File-Based State Machine
+
+Task state is determined entirely by file presence — no database required:
+
+```
+{base_save_dir}/{category}/{uuid}_{task_lang}_{env_lang}/
+  ├─ (nothing)                          → PENDING
+  ├─ context/ but no .txt               → IN_PROGRESS (incomplete)
+  ├─ eval_result.txt line 1 = integer   → COMPLETED
+  ├─ eval_result.txt line 1 = "eval_failed" → EVAL_FAILED (retry)
+  └─ fail.flag                          → FAILED (all retries exhausted)
+```
+
+`cleanup.py` deletes IN_PROGRESS and EVAL_FAILED directories. `completion_checker.py` only counts COMPLETED tasks. This scheme is idempotent and safe for future distributed execution.
+
 ## Configuration Constants (`constants.py`)
 
 - `SCREEN_WIDTH = 1024`, `SCREEN_HEIGHT = 768` — VM display resolution
