@@ -211,7 +211,7 @@ class TiOne_GUI_Agent:
                 if coord and len(coord) == 2:
                     parsed_actions.append({'func': 'move_to_pixel', 'kwargs': {'x': int(coord[0]), 'y': int(coord[1])}})
 
-            elif action == "left_click":
+            elif action == "left_click" or action == "click":
                 coord = args.get("coordinate", [])
                 modifier = args.get("text", None)
 
