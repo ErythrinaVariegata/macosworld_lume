@@ -165,6 +165,36 @@ class TiOne_GUI_Agent:
                         f"API call failed after {self.API_MAX_RETRIES} attempts. Last error: {last_error}"
                     )
 
+    @staticmethod
+    def _extract_json_objects(text: str) -> list:
+        """Extract all valid JSON objects containing "name" from *text*.
+
+        Handles garbled model output by scanning for every ``{`` that
+        looks like the start of a tool-call object and attempting to
+        parse progressively longer substrings until a valid JSON object
+        is found.
+        """
+        objects = []
+        i = 0
+        while i < len(text):
+            if text[i] == '{':
+                # Try increasing lengths to find a complete JSON object
+                for end in range(i + 1, len(text) + 1):
+                    if text[end - 1] == '}':
+                        try:
+                            obj = json.loads(text[i:end])
+                            if isinstance(obj, dict) and "name" in obj:
+                                objects.append(obj)
+                                i = end  # skip past this object
+                                break
+                        except json.JSONDecodeError:
+                            continue
+                else:
+                    i += 1
+            else:
+                i += 1
+        return objects
+
     def parse_agent_output(self, raw_response: str) -> list:
         """Parse model response into action dicts.
 
@@ -172,9 +202,19 @@ class TiOne_GUI_Agent:
         """
         parsed_actions = []
 
-        # Extract <tool_call> blocks
+        # --- Phase 1: collect raw text chunks that may contain JSON ---
         tool_call_pattern = r'<tool_call>(.*?)</tool_call>'
         matches = re.findall(tool_call_pattern, raw_response, re.DOTALL)
+
+        # If regex matched nothing but <tool_call> tag exists (missing
+        # closing tag or garbled), grab everything after the *last*
+        # <tool_call> tag as a fallback chunk.
+        if not matches and '<tool_call>' in raw_response:
+            last_idx = raw_response.rfind('<tool_call>')
+            tail = raw_response[last_idx + len('<tool_call>'):]
+            # Strip a trailing </tool_call> if present
+            tail = re.sub(r'</tool_call>\s*$', '', tail)
+            matches.append(tail)
 
         # Also try bare JSON objects with "name" field
         if not matches:
@@ -183,13 +223,21 @@ class TiOne_GUI_Agent:
                 if line.startswith('{') and '"name"' in line:
                     matches.append(line)
 
+        # --- Phase 2: parse JSON from each chunk ---
+        tool_calls = []
         for match in matches:
+            stripped = match.strip()
             try:
-                tool_call = json.loads(match.strip())
+                obj = json.loads(stripped)
+                if isinstance(obj, dict) and "name" in obj:
+                    tool_calls.append(obj)
+                    continue
             except json.JSONDecodeError:
-                print(f"Error parsing tool call JSON: {match[:100]}")
-                continue
+                pass
+            # Fast-path failed — use robust extractor for garbled text
+            tool_calls.extend(self._extract_json_objects(stripped))
 
+        for tool_call in tool_calls:
             if tool_call.get("name") != "computer":
                 continue
 
@@ -198,6 +246,9 @@ class TiOne_GUI_Agent:
 
             if action == "key":
                 text = args.get("text", "")
+                # Some models return text as a list, e.g. ["enter"]
+                if isinstance(text, list):
+                    text = text[0] if text else ""
                 if text:
                     # Convert Claude CUA key format (command+c) to our hotkey format
                     parsed_actions.append({'func': 'hotkey', 'kwargs': {'key': text}})
