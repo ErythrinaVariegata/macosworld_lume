@@ -10,7 +10,13 @@ class Evaluator:
         self.ssh_username = ssh_username
         self.ssh_pkey = ssh_pkey
 
+    def _normalize_guest_paths(self, command: str) -> str:
+        if self.ssh_username == 'ec2-user':
+            return command
+        return command.replace('/Users/ec2-user/', f'/Users/{self.ssh_username}/')
+
     def run_command(self, command: str) -> str:
+        command = self._normalize_guest_paths(command)
         command = command.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$')
         ssh_command = f'ssh -o StrictHostKeyChecking=no -i "{self.ssh_pkey}" {self.ssh_username}@{self.ssh_host} "{command}"'
         try:

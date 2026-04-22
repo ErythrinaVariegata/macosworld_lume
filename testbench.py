@@ -10,6 +10,10 @@ from utils.run_task import run_task
 from utils.timeout import TimeoutException
 from constants import env_init_command, eval_init_command, language_lookup_table
 
+# Maximum consecutive Lume infrastructure failures before aborting the run.
+# Prevents wasting hours retrying when the hypervisor or host is broken.
+LUME_INFRA_MAX_CONSECUTIVE_FAILURES = 3
+
 
 # Parse args
 parser = argparse.ArgumentParser()
@@ -70,6 +74,7 @@ language_combinations = parse_language_list(arguments.languages)
 
 
 incomplete_task_list = []
+lume_consecutive_infra_failures = 0  # Track consecutive Lume infra failures
 
 for task_language, env_language in language_combinations:
     if task_language in language_lookup_table:
@@ -160,10 +165,31 @@ for task_language, env_language in language_combinations:
                     eval_init_command = eval_init_command
                 )
                 task_complete_flag = True
+                # Reset infra failure counter on success
+                lume_consecutive_infra_failures = 0
                 break
             except TimeoutException as e:
                 print_message(e, title = f'Task {task_id} Error')
             except Exception as e:
+                # Check for Lume infrastructure failure — fast-exit to avoid
+                # wasting hours retrying when the hypervisor is broken.
+                from utils.lume_utils import LumeInfraError
+                if isinstance(e, LumeInfraError):
+                    lume_consecutive_infra_failures += 1
+                    print_message(
+                        f'{e}\n'
+                        f'Consecutive Lume infra failures: {lume_consecutive_infra_failures}/{LUME_INFRA_MAX_CONSECUTIVE_FAILURES}',
+                        title=f'Task {task_id} Lume Infra Error',
+                    )
+                    if lume_consecutive_infra_failures >= LUME_INFRA_MAX_CONSECUTIVE_FAILURES:
+                        print_message(
+                            f'Aborting benchmark: {lume_consecutive_infra_failures} consecutive Lume infrastructure failures. '
+                            f'Check the host machine (disk space, Lume daemon, hypervisor state).',
+                            title='FATAL',
+                        )
+                        raise SystemExit(1)
+                    # Skip remaining attempts for this task — the issue is infra, not the task
+                    break
                 print_message(e, title = f'Task {task_id} Error')
 
         if not task_complete_flag:

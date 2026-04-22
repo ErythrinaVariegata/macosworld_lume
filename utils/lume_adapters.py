@@ -28,6 +28,11 @@ class LumeEvaluator:
         self.ssh_username = ssh_username
         self.ssh_password = ssh_password
 
+    def _normalize_guest_paths(self, command: str) -> str:
+        if self.ssh_username == 'ec2-user':
+            return command
+        return command.replace('/Users/ec2-user/', f'/Users/{self.ssh_username}/')
+
     def _run_lume_ssh(self, command: str, timeout: str = SSH_TIMEOUT,
                       subprocess_timeout: int = SUBPROCESS_TIMEOUT) -> tuple:
         """Low-level: run a single command via lume ssh.
@@ -114,6 +119,7 @@ class LumeEvaluator:
 
     def run_command(self, command: str) -> tuple:
         """Run a command on the guest, retrying on timeout with app warm-up."""
+        command = self._normalize_guest_paths(command)
         success, output = self._run_lume_ssh(command)
         if success or "timed out" not in output:
             return success, output
@@ -172,6 +178,7 @@ class LumeAsyncSSHCommandHandler:
 
     def run_command(self, command: str) -> subprocess.Popen:
         """Start the command asynchronously via ``lume ssh``."""
+        command = command if self.ssh_username == 'ec2-user' else command.replace('/Users/ec2-user/', f'/Users/{self.ssh_username}/')
         self.process = subprocess.Popen(
             [
                 "lume", "ssh", self.vm_name, command,

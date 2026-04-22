@@ -31,12 +31,12 @@ eval_init_command = """osascript -e 'tell application "System Events" to get val
 lume_snapshot_lookup = {
     'snapshot_used_en': 'macos-tahoe-cua_macosworld-en',
     'snapshot_used_zh': 'macos-tahoe-cua_macosworld-zh',
-    'snapshot_used_ar': 'golden_used_ar',
-    'snapshot_used_ja': 'golden_used_ja',
-    'snapshot_used_ru': 'golden_used_ru',
-    'snapshot_usedApps_en': 'golden_usedApps_en',
-    'snapshot_usedApps_zh': 'golden_usedApps_zh',
-    'snapshot_usedApps_ar': 'golden_usedApps_ar',
-    'snapshot_usedApps_ja': 'golden_usedApps_ja',
-    'snapshot_usedApps_ru': 'golden_usedApps_ru',
+    'snapshot_used_ar': 'macos-tahoe-cua_macosworld-en',  # fallback — no dedicated AR golden VM yet
+    'snapshot_used_ja': 'macos-tahoe-cua_macosworld-en',  # fallback — no dedicated JA golden VM yet
+    'snapshot_used_ru': 'macos-tahoe-cua_macosworld-en',  # fallback — no dedicated RU golden VM yet
+    'snapshot_usedApps_en': 'macos-tahoe-cua_macosworld-en',
+    'snapshot_usedApps_zh': 'macos-tahoe-cua_macosworld-zh',
+    'snapshot_usedApps_ar': 'macos-tahoe-cua_macosworld-en',  # fallback
+    'snapshot_usedApps_ja': 'macos-tahoe-cua_macosworld-en',  # fallback
+    'snapshot_usedApps_ru': 'macos-tahoe-cua_macosworld-en',  # fallback
 }

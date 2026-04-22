@@ -28,6 +28,13 @@ def inprocess_result_matching(inprocess_stdout: str, inprocess_gold_elements: li
     # No match
     return 'error_no_match'
 
+
+def normalize_guest_paths(command: str, guest_username: str) -> str:
+    if guest_username == 'ec2-user':
+        return command
+    return command.replace('/Users/ec2-user/', f'/Users/{guest_username}/')
+
+
 def run_task(
     # Task-related params
     task_id: str,
@@ -124,8 +131,10 @@ def run_task(
                 break
 
         if not clone_success:
-            raise RuntimeError(
-                f"Failed to clone and start Lume VM from '{golden_vm_name}' after {clone_max_trials} attempts"
+            from utils.lume_utils import LumeInfraError
+            raise LumeInfraError(
+                f"Failed to clone and start Lume VM from '{golden_vm_name}' after {clone_max_trials} attempts. "
+                f"This likely indicates a systemic Lume/hypervisor issue — aborting to avoid further wasted retries."
             )
 
         ssh_host = vm_info["ip"]
@@ -229,11 +238,13 @@ def run_task(
             for trial in range(pre_command_max_trials):
                 if isinstance(pre_command, str):
                     # When the prep command is a string
-                    pre_command_complete_flag, pre_command_output = remote_client.run_ssh_command(pre_command)
+                    normalized_pre_command = normalize_guest_paths(pre_command, guest_username)
+                    pre_command_complete_flag, pre_command_output = remote_client.run_ssh_command(normalized_pre_command)
                 elif isinstance(pre_command, dict):
                     # When the prep command is a dict of language-dependent string
                     if env_language in pre_command:
-                        pre_command_complete_flag, pre_command_output = remote_client.run_ssh_command(pre_command[env_language])
+                        normalized_pre_command = normalize_guest_paths(pre_command[env_language], guest_username)
+                        pre_command_complete_flag, pre_command_output = remote_client.run_ssh_command(normalized_pre_command)
                     else:
                         raise NotImplementedError(f'Task {task_id} has no preparation command for env language "{env_language}".')
                 else:
@@ -241,6 +252,11 @@ def run_task(
                 if pre_command_complete_flag:
                     # When the prep command finishes
                     break
+                else:
+                    print_message(
+                        f'Prep command trial {trial+1}/{pre_command_max_trials} failed for task {task_id}. Output: {pre_command_output}',
+                        title=f'Task {task_id}',
+                    )
             if "force_error_free_prep" in task_dict:
                 if task_dict["force_error_free_prep"] and not pre_command_complete_flag:
                     # When the prep command repeatedly encounter errors until a max trial
@@ -271,7 +287,7 @@ def run_task(
             # Inject events
             if inprocess_event_handler is not None:
                 if current_step == inprocess_event_start_timestep:
-                    inprocess_event_handler.run_command(inprocess_command)
+                    inprocess_event_handler.run_command(normalize_guest_paths(inprocess_command, guest_username))
                     time.sleep(5)
                     print_message(title = f'Task {task_id}/{env_language}/{task_language} Step {current_step}/{max_steps}', content = 'Distraction event injected')
 
